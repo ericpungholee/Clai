@@ -1,13 +1,14 @@
 import Link from "next/link";
+import Image from "next/image";
 
 export default function HomePage() {
   return (
     <div className="flex min-h-screen bg-stone-50 relative overflow-hidden">
       {/* Floating header */}
-      <header className="fixed top-0 left-0 right-0 z-50 bg-stone-50/80 backdrop-blur-sm border-b border-black/5">
-        <nav className="flex items-center justify-between px-8 py-4 max-w-7xl mx-auto">
-          <Link href="/home" className="text-3xl font-semibold text-black hover:text-black/70 transition-colors">
-            Clai
+      <header className="fixed top-0 left-0 right-0 z-50 bg-stone-50/80 backdrop-blur-sm border-b border-black/5 overflow-visible">
+        <nav className="flex items-center justify-between px-8 py-0 max-w-7xl mx-auto">
+          <Link href="/home" className="hover:opacity-70 transition-opacity flex items-center">
+            <Image src="/logo.png" alt="Clai" width={180} height={60} className="h-36 w-auto -my-6" />
           </Link>
           <div className="flex items-center gap-8">
             <a href="/" className="text-black font-light hover:text-black/70 transition-colors">
