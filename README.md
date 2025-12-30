@@ -1,6 +1,6 @@
-# clai
+# Clai
 
-clai is an AI powered editor for designing physical products.
+Clai is an AI powered editor for designing physical products.
 
 It helps individuals and teams turn rough ideas into clear, editable, and manufacturable product designs using an intuitive, document-style interface enhanced by AI. Instead of switching between scattered tools, notes, and iterations, clai keeps the entire product thinking process in one place.
 
