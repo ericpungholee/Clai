@@ -1,0 +1,15 @@
+# Docker Compose configuration for DEMO MODE
+# This extends docker-compose.yml and enables artifact saving
+# Usage: docker compose -f docker-compose.yml -f docker-compose.demo.yml up
+
+version: '3.8'
+
+services:
+  fastapi_app:
+    environment:
+      # Override to enable artifact saving for demos
+      - SAVE_ARTIFACTS_LOCALLY=true
+    volumes:
+      # Mount artifacts directory to easily access saved files
+      - ./tests/artifacts:/app/tests/artifacts
+

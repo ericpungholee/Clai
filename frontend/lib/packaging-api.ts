@@ -1,0 +1,145 @@
+import { PackagingState, PackagingStatus, PackageType, PackageDimensions } from "@/lib/packaging-types";
+import { 
+  isDemoMode, 
+  getDemoPackagingStateEmpty, 
+  getDemoPackagingStateWithTextures,
+  isDemoPackagingGenerated,
+  setDemoPackagingGenerated,
+  resetDemoPackaging,
+} from "@/lib/demo-fixtures";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const DEMO_FRONTEND = process.env.NEXT_PUBLIC_DEMO_MODE === "frontend";
+
+async function handleResponse<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    let detail = `Request failed with status ${response.status}`;
+    try {
+      const errorData = await response.json();
+      detail = errorData.detail || JSON.stringify(errorData);
+    } catch {
+      detail = await response.text();
+    }
+    throw new Error(detail || `Request failed with status ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export async function getPackagingState(): Promise<PackagingState> {
+  // Demo mode: return empty or loaded state based on generation status
+  if (DEMO_FRONTEND) {
+    if (isDemoPackagingGenerated()) {
+      return getDemoPackagingStateWithTextures();
+    }
+    return getDemoPackagingStateEmpty();
+  }
+  
+  const response = await fetch(`${API_BASE}/packaging/state`);
+  return handleResponse<PackagingState>(response);
+}
+
+export async function updatePackagingDimensions(
+  packageType: PackageType,
+  dimensions: PackageDimensions
+): Promise<void> {
+  // Demo mode: no-op for dimension updates
+  if (DEMO_FRONTEND) {
+    return;
+  }
+  
+  const response = await fetch(`${API_BASE}/packaging/update-dimensions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ package_type: packageType, dimensions }),
+  });
+  await handleResponse(response);
+}
+
+export async function getPackagingStatus(): Promise<PackagingStatus> {
+  const response = await fetch(`${API_BASE}/packaging/status`);
+  return handleResponse<PackagingStatus>(response);
+}
+
+export async function resetCurrentShape(): Promise<{
+  message: string;
+  package_type: string;
+  dimensions: Record<string, number>;
+}> {
+  // Demo mode: reset the demo packaging state
+  if (DEMO_FRONTEND) {
+    resetDemoPackaging();
+    return {
+      message: "Demo packaging reset",
+      package_type: "box",
+      dimensions: { width: 100, height: 150, depth: 100 },
+    };
+  }
+  
+  const response = await fetch(`${API_BASE}/packaging/reset-current-shape`, {
+    method: "POST",
+  });
+  return handleResponse(response);
+}
+
+export async function clearPackagingState(): Promise<void> {
+  const response = await fetch(`${API_BASE}/packaging/clear`, {
+    method: "POST",
+  });
+  await handleResponse(response);
+}
+
+export async function exportPackageFormats(): Promise<{ status: string; files: Record<string, string> }> {
+  const response = await fetch(`${API_BASE}/packaging/export`, {
+    method: "POST",
+  });
+  return handleResponse(response);
+}
+
+export async function downloadPackageExport(format: "blend" | "stl" | "jpg"): Promise<Blob> {
+  const response = await fetch(`${API_BASE}/packaging/export/${format}`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ detail: `Request failed with status ${response.status}` }));
+    throw new Error(errorData.detail || `Request failed with status ${response.status}`);
+  }
+  return response.blob();
+}
+
+export async function exportDielineFormats(): Promise<{ status: string; files: Record<string, string> }> {
+  const response = await fetch(`${API_BASE}/packaging/dieline/export`, {
+    method: "POST",
+  });
+  return handleResponse(response);
+}
+
+export async function downloadDielineExport(format: "pdf"): Promise<Blob> {
+  const response = await fetch(`${API_BASE}/packaging/dieline/export/${format}`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ detail: `Request failed with status ${response.status}` }));
+    throw new Error(errorData.detail || `Request failed with status ${response.status}`);
+  }
+  return response.blob();
+}
+
+/**
+ * Demo mode: Simulate generating all panels with mock loading.
+ * Returns a promise that resolves after the mock delay.
+ */
+export async function demoGenerateAllPanels(): Promise<void> {
+  if (!DEMO_FRONTEND) {
+    throw new Error("demoGenerateAllPanels should only be called in demo mode");
+  }
+  
+  // Simulate loading delay (3 seconds)
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  
+  // Mark as generated
+  setDemoPackagingGenerated(true);
+}
+
+/**
+ * Check if running in frontend demo mode
+ */
+export function isPackagingDemoMode(): boolean {
+  return DEMO_FRONTEND;
+}
+

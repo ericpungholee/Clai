@@ -1,0 +1,26 @@
+{
+  "_comment": "Archive of legacy/reference 3D models for future use",
+  "nov_23_demo": {
+    "description": "Original Nov 23rd demo model - Lego DK Labubu with clean lines",
+    "model_url": "https://v3b.fal.media/files/b/penguin/3AZzNw_N5JUxy1PE6kpTf_model.glb",
+    "generation_settings": {
+      "seed": 1337,
+      "texture_size": 2048,
+      "mesh_simplify": 0.96,
+      "ss_sampling_steps": 26,
+      "ss_guidance_strength": 8.0,
+      "slat_sampling_steps": 26,
+      "slat_guidance_strength": 3.2,
+      "multi_image": false
+    },
+    "timestamp": "2025-11-23T15:43:00Z",
+    "notes": "Brown hoodie with ears, white face, red tie, Lego baseplate, standing pose"
+  },
+  "nov_23_alt": {
+    "description": "Alternate Nov 23rd model - floating hat variant",
+    "model_url": "https://v3b.fal.media/files/b/kangaroo/-oCV2mc4xTXRE96GbwsvA_model.glb",
+    "timestamp": "2025-11-23T15:45:00Z",
+    "notes": "Similar but has floating hat artifact"
+  }
+}
+
