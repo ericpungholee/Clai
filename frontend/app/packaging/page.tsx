@@ -1,63 +1,113 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
-import { Slider } from "@/components/ui/slider";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  Box,
+  CheckCircle2,
+  CylinderIcon,
+  MessageSquare,
+  Pencil,
+  RotateCcw,
+} from "lucide-react";
+import { AIChatPanel } from "@/components/AIChatPanel";
 import { DielineEditor } from "@/components/dieline-editor";
 import { PackageViewer3D } from "@/components/package-viewer-3d";
-import { AIChatPanel } from "@/components/AIChatPanel";
-import { CylinderIcon, Box, CheckCircle2, MessageSquare, Pencil, RotateCcw } from "lucide-react";
-import { useLoading } from "@/providers/LoadingProvider";
-import { updatePackagingDimensions, getPackagingState, getPackagingStatus, resetCurrentShape } from "@/lib/packaging-api";
-import { getCachedTextureUrl } from "@/lib/texture-cache";
-import type {
-  PackageType,
-  PackageDimensions,
-  PackagingState,
-  PackageModel,
-  PanelId,
-  DielinePath,
-} from "@/lib/packaging-types";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  getPackagingState,
+  resetCurrentShape,
+  updatePackagingDimensions,
+} from "@/lib/packaging-api";
+import {
+  getCurrentProject,
+  saveCurrentProject,
+  updateCurrentProjectContext,
+} from "@/lib/project-api";
+import {
+  calculatePackageSurfaceArea,
+  calculatePackageVolume,
+  getShapeState,
+  loadCachedPanelTextures,
+  normalizePackageDimensions,
+  resolvePackagingModel,
+} from "@/lib/packaging-helpers";
 import {
   DEFAULT_PACKAGE_DIMENSIONS,
   generatePackageModel,
   updateModelFromDielines,
 } from "@/lib/packaging-types";
+import type {
+  DielinePath,
+  PackageDimensions,
+  PackageModel,
+  PackageType,
+  PackagingState,
+  PanelId,
+} from "@/lib/packaging-types";
+import type { SavedProjectSummary } from "@/lib/project-types";
+import { clearTextureCache, getCachedTextureUrl } from "@/lib/texture-cache";
+import { useLoading } from "@/providers/LoadingProvider";
 
-// Separate component for the editor panel to reduce main component re-renders
+type ViewMode = "2d" | "3d";
+
+const PACKAGE_TYPES: readonly {
+  type: PackageType;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+}[] = [
+  { type: "box", label: "Box", icon: Box },
+  { type: "cylinder", label: "Cylinder", icon: CylinderIcon },
+];
+
+const TEXTURE_NOTIFICATION_TIMEOUT_MS = 3000;
+const DIMENSION_SAVE_DEBOUNCE_MS = 1000;
+const GENERATION_POLL_INTERVAL_MS = 1000;
+
 const PackagingEditor = React.memo(function PackagingEditor({
   activeView,
-  setActiveView,
-  packageType,
-  handlePackageTypeChange,
-  handleResetCurrentShape,
   dimensions,
   handleDimensionChange,
+  handlePackageTypeChange,
+  handleResetCurrentShape,
   packageModel,
+  packageType,
+  setActiveView,
   surfaceArea,
   volume,
-  packagingState,
 }: {
-  activeView: "2d" | "3d";
-  setActiveView: (view: "2d" | "3d") => void;
-  packageType: PackageType;
+  activeView: ViewMode;
+  dimensions: PackageDimensions;
+  handleDimensionChange: (
+    key: keyof PackageDimensions,
+    value: number,
+  ) => void;
   handlePackageTypeChange: (type: PackageType) => Promise<void>;
   handleResetCurrentShape: () => Promise<void>;
-  dimensions: PackageDimensions;
-  handleDimensionChange: (key: keyof PackageDimensions, value: number) => void;
   packageModel: PackageModel | null;
+  packageType: PackageType;
+  setActiveView: (view: ViewMode) => void;
   surfaceArea: number;
   volume: number;
-  packagingState: PackagingState | null;
 }) {
   return (
-    <TabsContent value="editor" className="flex-1 overflow-y-auto p-4 flex flex-col space-y-4 mt-0">
-      {/* View Toggle Buttons */}
+    <TabsContent
+      value="editor"
+      className="flex-1 overflow-y-auto p-4 flex flex-col space-y-4 mt-0"
+    >
       <div className="space-y-2">
-        <Label className="text-xs font-medium text-muted-foreground">View Mode</Label>
+        <Label className="text-xs font-medium text-muted-foreground">
+          View Mode
+        </Label>
         <div className="flex gap-2">
           <Button
             variant={activeView === "2d" ? "default" : "outline"}
@@ -78,14 +128,15 @@ const PackagingEditor = React.memo(function PackagingEditor({
         </div>
       </div>
 
-      {/* Package Type Selection */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <Label className="text-xs font-medium text-muted-foreground">Package Type</Label>
+          <Label className="text-xs font-medium text-muted-foreground">
+            Package Type
+          </Label>
           <Button
             variant="ghost"
             size="sm"
-            onClick={handleResetCurrentShape}
+            onClick={() => void handleResetCurrentShape()}
             className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
             title={`Reset ${packageType} to defaults`}
           >
@@ -100,7 +151,7 @@ const PackagingEditor = React.memo(function PackagingEditor({
               variant={packageType === type ? "default" : "outline"}
               className="flex flex-col items-center gap-1 h-auto py-3"
               size="sm"
-              onClick={() => handlePackageTypeChange(type)}
+              onClick={() => void handlePackageTypeChange(type)}
             >
               <Icon className="w-4 h-4" />
               <span className="text-xs">{label}</span>
@@ -109,7 +160,6 @@ const PackagingEditor = React.memo(function PackagingEditor({
         </div>
       </div>
 
-      {/* Dimensions */}
       <div className="border-2 border-black p-4 space-y-4">
         <h3 className="text-sm font-semibold text-foreground">Dimensions (mm)</h3>
 
@@ -121,10 +171,10 @@ const PackagingEditor = React.memo(function PackagingEditor({
                 <Input
                   type="number"
                   value={packageModel?.dimensions.width ?? dimensions.width}
-                  onChange={(e) => {
-                    const val = Number(e.target.value);
-                    if (!isNaN(val) && val >= 0) {
-                      handleDimensionChange("width", val);
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    if (!Number.isNaN(value) && value >= 0) {
+                      handleDimensionChange("width", value);
                     }
                   }}
                   className="w-16 h-7 text-xs"
@@ -147,10 +197,10 @@ const PackagingEditor = React.memo(function PackagingEditor({
                 <Input
                   type="number"
                   value={packageModel?.dimensions.height ?? dimensions.height}
-                  onChange={(e) => {
-                    const val = Number(e.target.value);
-                    if (!isNaN(val) && val >= 0) {
-                      handleDimensionChange("height", val);
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    if (!Number.isNaN(value) && value >= 0) {
+                      handleDimensionChange("height", value);
                     }
                   }}
                   className="w-16 h-7 text-xs"
@@ -173,9 +223,11 @@ const PackagingEditor = React.memo(function PackagingEditor({
                 <Input
                   type="number"
                   value={packageModel?.dimensions.depth ?? dimensions.depth}
-                  onChange={(e) => {
-                    const val = Number(e.target.value);
-                    if (!isNaN(val) && val >= 0) handleDimensionChange("depth", val);
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    if (!Number.isNaN(value) && value >= 0) {
+                      handleDimensionChange("depth", value);
+                    }
                   }}
                   className="w-16 h-7 text-xs"
                   min={0}
@@ -191,7 +243,7 @@ const PackagingEditor = React.memo(function PackagingEditor({
               />
             </div>
           </>
-        ) : packageType === "cylinder" ? (
+        ) : (
           <>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -199,9 +251,11 @@ const PackagingEditor = React.memo(function PackagingEditor({
                 <Input
                   type="number"
                   value={(packageModel?.dimensions.width ?? dimensions.width) / 2}
-                  onChange={(e) => {
-                    const val = Number(e.target.value);
-                    if (!isNaN(val) && val >= 0) handleDimensionChange("width", val * 2);
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    if (!Number.isNaN(value) && value >= 0) {
+                      handleDimensionChange("width", value * 2);
+                    }
                   }}
                   className="w-16 h-7 text-xs"
                   min={0}
@@ -223,9 +277,11 @@ const PackagingEditor = React.memo(function PackagingEditor({
                 <Input
                   type="number"
                   value={packageModel?.dimensions.height ?? dimensions.height}
-                  onChange={(e) => {
-                    const val = Number(e.target.value);
-                    if (!isNaN(val) && val >= 0) handleDimensionChange("height", val);
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    if (!Number.isNaN(value) && value >= 0) {
+                      handleDimensionChange("height", value);
+                    }
                   }}
                   className="w-16 h-7 text-xs"
                   min={0}
@@ -241,20 +297,23 @@ const PackagingEditor = React.memo(function PackagingEditor({
               />
             </div>
           </>
-        ) : null}
+        )}
       </div>
 
-      {/* Package Info */}
       <div className="border-2 border-black p-4 space-y-2">
-        <h3 className="text-sm font-semibold text-foreground">Package Information</h3>
+        <h3 className="text-sm font-semibold text-foreground">
+          Package Information
+        </h3>
         <div className="text-xs space-y-1">
           <div className="flex justify-between text-muted-foreground">
             <span>Volume:</span>
-            <span className="font-medium text-foreground">{volume} mm³</span>
+            <span className="font-medium text-foreground">{volume} mm3</span>
           </div>
           <div className="flex justify-between text-muted-foreground">
             <span>Surface Area:</span>
-            <span className="font-medium text-foreground">{surfaceArea} mm²</span>
+            <span className="font-medium text-foreground">
+              {surfaceArea} mm2
+            </span>
           </div>
         </div>
       </div>
@@ -262,354 +321,402 @@ const PackagingEditor = React.memo(function PackagingEditor({
   );
 });
 
-const PACKAGE_TYPES: readonly { type: PackageType; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-  { type: "box", label: "Box", icon: Box },
-  { type: "cylinder", label: "Cylinder", icon: CylinderIcon },
-] as const;
-
 function Packaging() {
   const { stopLoading } = useLoading();
-  const [packagingState, setPackagingState] = useState<PackagingState | null>(null);
+
+  const [packagingState, setPackagingState] = useState<PackagingState | null>(
+    null,
+  );
   const [isHydrated, setIsHydrated] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  
   const [packageType, setPackageType] = useState<PackageType>("box");
-  const [dimensions, setDimensions] = useState<PackageDimensions>(DEFAULT_PACKAGE_DIMENSIONS.box);
-  const [packageModel, setPackageModel] = useState<PackageModel | null>(null); // Start with null until hydrated
+  const [dimensions, setDimensions] = useState<PackageDimensions>(
+    DEFAULT_PACKAGE_DIMENSIONS.box,
+  );
+  const [packageModel, setPackageModel] = useState<PackageModel | null>(null);
   const [selectedPanelId, setSelectedPanelId] = useState<PanelId | null>(null);
-  const [activeView, setActiveView] = useState<"2d" | "3d">("3d");
-  const [panelTextures, setPanelTextures] = useState<Partial<Record<PanelId, string>>>({});
-  const [showTextureNotification, setShowTextureNotification] = useState<{ panelId: PanelId; show: boolean } | null>(null);
-  const [lightingMode, setLightingMode] = useState<"studio" | "sunset" | "warehouse" | "forest">("studio");
-  const [displayMode, setDisplayMode] = useState<"solid" | "wireframe">("solid");
-  const [zoomAction, setZoomAction] = useState<"in" | "out" | null>(null);
-  const [autoRotate, setAutoRotate] = useState(true);
+  const [activeView, setActiveView] = useState<ViewMode>("3d");
+  const [panelTextures, setPanelTextures] = useState<
+    Partial<Record<PanelId, string>>
+  >({});
+  const [showTextureNotification, setShowTextureNotification] = useState<{
+    panelId: PanelId;
+    show: boolean;
+  } | null>(null);
+  const [currentProject, setCurrentProject] = useState<SavedProjectSummary | null>(null);
+  const [isSavingProject, setIsSavingProject] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
-  /**
-   * Hydrate state from backend on mount/reload.
-   * Loads the saved state for the current shape type.
-   */
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDimensionsRef = useRef<PackageDimensions | null>(null);
+  const notificationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const saveMessageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const applyPackagingState = useCallback(
+    async (state: PackagingState, targetType?: PackageType) => {
+      const resolved = resolvePackagingModel(
+        state,
+        targetType || state.current_package_type || "box",
+      );
+
+      setPackagingState(state);
+      setPackageType(resolved.type);
+      setDimensions(resolved.dimensions);
+      setPackageModel(resolved.model);
+      setPanelTextures(
+        await loadCachedPanelTextures(
+          resolved.model,
+          resolved.shapeState.panel_textures,
+        ),
+      );
+    },
+    [],
+  );
+
   const hydrateFromBackend = useCallback(async () => {
     try {
       const state = await getPackagingState();
-      setPackagingState(state);
-      
-      const targetType = state.current_package_type || 'box';
-      const shapeState = targetType === 'cylinder' ? state.cylinder_state : state.box_state;
-      const targetDimensions = shapeState?.dimensions as PackageDimensions;
-      
-      // Generate model for current shape type
-      const newModel = generatePackageModel(targetType, targetDimensions);
-      setPackageModel(newModel);
-      
-      // Update type and dimensions
-      setPackageType(targetType);
-      setDimensions(targetDimensions);
-      
-      // Restore textures for current shape type
-      const cachedTextures: Partial<Record<PanelId, string>> = {};
-      for (const [panelId, texture] of Object.entries(shapeState?.panel_textures || {})) {
-        if (newModel.panels.some(p => p.id === panelId)) {
-          try {
-            const cachedUrl = await getCachedTextureUrl(panelId, texture.texture_url);
-            cachedTextures[panelId as PanelId] = cachedUrl;
-          } catch (err) {
-            console.error(`Failed to load texture for ${panelId}:`, err);
-          }
-        }
-      }
-      
-      if (Object.keys(cachedTextures).length > 0) {
-        setPanelTextures(cachedTextures);
-      }
-      
-      // Check if generation is in progress
-      if (state.in_progress || state.bulk_generation_in_progress) {
-        setIsGenerating(true);
-      }
-      
-      setIsHydrated(true);
-    } catch (error) {
-      console.error("Failed to hydrate packaging state:", error);
-      const defaultModel = generatePackageModel('box', DEFAULT_PACKAGE_DIMENSIONS.box);
-      setPackageModel(defaultModel);
-      setPackageType('box');
+      await applyPackagingState(state);
+      setIsGenerating(state.in_progress || state.bulk_generation_in_progress);
+    } catch {
+      setPackagingState(null);
+      setPackageType("box");
       setDimensions(DEFAULT_PACKAGE_DIMENSIONS.box);
+      setPackageModel(
+        generatePackageModel("box", DEFAULT_PACKAGE_DIMENSIONS.box),
+      );
+      setPanelTextures({});
+    } finally {
       setIsHydrated(true);
     }
+  }, [applyPackagingState]);
+
+  useEffect(() => {
+    void hydrateFromBackend().finally(stopLoading);
+  }, [hydrateFromBackend, stopLoading]);
+
+  useEffect(() => {
+    void Promise.all([updateCurrentProjectContext("/packaging"), getCurrentProject()])
+      .then(([updatedProject, currentProject]) => {
+        setCurrentProject(updatedProject ?? currentProject);
+      })
+      .catch(() => {
+        // Packaging can still run without an active saved project.
+      });
   }, []);
-  
-  // Hydrate on mount ONLY (not on every render)
-  useEffect(() => {
-    hydrateFromBackend().finally(() => stopLoading());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty array = mount only
-  
-  // Poll for generation completion with exponential backoff
-  useEffect(() => {
-    if (!isGenerating) return;
 
-    const pollInterval = setInterval(async () => {
+  useEffect(() => {
+    if (!isGenerating) {
+      return;
+    }
+
+    let isCancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const poll = async () => {
       try {
-        // Fetch fresh state to update progress display in real-time
-        const freshState = await getPackagingState();
-        setPackagingState(freshState);
-        
-        if (!freshState.in_progress && !freshState.bulk_generation_in_progress) {
-          clearInterval(pollInterval);
-          setIsGenerating(false);
-          
-          // Clear texture cache to force fresh load of new textures
-          const { clearTextureCache } = await import('@/lib/texture-cache');
-          await clearTextureCache();
-          
-          // Force complete texture reload
-          const currentShapeState = packageType === 'cylinder' ? freshState.cylinder_state : freshState.box_state;
-          const newTextures: Partial<Record<PanelId, string>> = {};
-          
-          for (const [panelId, texture] of Object.entries(currentShapeState?.panel_textures || {})) {
-            if (packageModel && packageModel.panels.some(p => p.id === panelId)) {
-              try {
-                const cachedUrl = await getCachedTextureUrl(panelId, texture.texture_url);
-                newTextures[panelId as PanelId] = cachedUrl;
-              } catch (err) {
-                // Skip
-              }
-            }
-          }
-          
-          // Force update even if textures look the same
-          setPanelTextures({});
-          setTimeout(() => setPanelTextures(newTextures), 50);
+        const nextState = await getPackagingState();
+        if (isCancelled) {
+          return;
         }
-      } catch (err) {
-        // Skip
+
+        setPackagingState(nextState);
+
+        if (nextState.in_progress || nextState.bulk_generation_in_progress) {
+          timeoutId = setTimeout(poll, GENERATION_POLL_INTERVAL_MS);
+          return;
+        }
+
+        setIsGenerating(false);
+        await clearTextureCache();
+        if (isCancelled) {
+          return;
+        }
+
+        const resolved = resolvePackagingModel(nextState, packageType);
+        setPanelTextures(
+          await loadCachedPanelTextures(
+            resolved.model,
+            resolved.shapeState.panel_textures,
+          ),
+        );
+      } catch {
+        if (!isCancelled) {
+          timeoutId = setTimeout(poll, GENERATION_POLL_INTERVAL_MS);
+        }
       }
-    }, 1000); // Poll every second for real-time updates
+    };
 
-    return () => clearInterval(pollInterval);
-  }, [isGenerating, packageType, packageModel]);
+    void poll();
 
-  // Track if we should preserve manual dieline edits
-  const [hasManualDielineEdits, setHasManualDielineEdits] = useState(false);
+    return () => {
+      isCancelled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [isGenerating, packageType]);
 
   useEffect(() => {
-    // Skip if not yet hydrated (hydration handles model generation)
-    if (!isHydrated) return;
-    
-    const newModel = generatePackageModel(packageType, dimensions);
-    
-    // If user manually edited dielines, we could preserve those edits here
-    // But for now, we'll always regenerate to match 3D model
-    setPackageModel(newModel);
+    if (!isHydrated) {
+      return;
+    }
+
+    setPackageModel(generatePackageModel(packageType, dimensions));
     setSelectedPanelId(null);
-    setHasManualDielineEdits(false); // Reset flag when dimensions change
-  }, [packageType, dimensions.width, dimensions.height, dimensions.depth]);
-  
-  const handlePackageTypeChange = useCallback(async (type: PackageType) => {
-    if (!packagingState) return;
-    
-    const targetState = type === 'cylinder' ? packagingState.cylinder_state : packagingState.box_state;
-    const targetDimensions = targetState?.dimensions as PackageDimensions;
-    
-    // Generate model for target shape with its saved dimensions
-    const newModel = generatePackageModel(type, targetDimensions);
-    setPackageModel(newModel);
-    
-    // Update local state
-    setPackageType(type);
-    setDimensions(targetDimensions);
-    setSelectedPanelId(null);
-    
-    // Load textures for target shape
-    const cachedTextures: Partial<Record<PanelId, string>> = {};
-    for (const [panelId, texture] of Object.entries(targetState.panel_textures || {})) {
-      if (newModel.panels.some(p => p.id === panelId)) {
-        try {
-          const cachedUrl = await getCachedTextureUrl(panelId, texture.texture_url);
-          cachedTextures[panelId as PanelId] = cachedUrl;
-        } catch (err) {
-          // Texture load failed, skip this panel
-        }
+  }, [dimensions, isHydrated, packageType]);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
       }
-    }
-    setPanelTextures(cachedTextures);
-    
-    // Persist type switch to backend
-    try {
-      await updatePackagingDimensions(type, targetDimensions);
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setSaveError(`Failed to save: ${errorMessage}`);
-      setTimeout(() => setSaveError(null), 5000);
-    }
-  }, [packagingState, packageType]);
+      if (notificationTimeoutRef.current) {
+        clearTimeout(notificationTimeoutRef.current);
+      }
+      if (saveMessageTimeoutRef.current) {
+        clearTimeout(saveMessageTimeoutRef.current);
+      }
+    };
+  }, []);
 
-  // Debounced dimension saving
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const pendingDimensionsRef = useRef<PackageDimensions | null>(null);
-
-  const saveDimensionsDebounced = useCallback(async (type: PackageType, dims: PackageDimensions) => {
+  const persistDimensionsNow = useCallback(async () => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
     }
 
-    pendingDimensionsRef.current = dims;
+    const nextDimensions = pendingDimensionsRef.current ?? dimensions;
+    pendingDimensionsRef.current = null;
+    await updatePackagingDimensions(packageType, nextDimensions);
+  }, [dimensions, packageType]);
 
-    saveTimeoutRef.current = setTimeout(async () => {
-      if (pendingDimensionsRef.current) {
+  const saveDimensionsDebounced = useCallback(
+    (type: PackageType, nextDimensions: PackageDimensions) => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+
+      pendingDimensionsRef.current = nextDimensions;
+
+      saveTimeoutRef.current = setTimeout(async () => {
+        if (!pendingDimensionsRef.current) {
+          return;
+        }
+
         try {
           await updatePackagingDimensions(type, pendingDimensionsRef.current);
-          console.log("[Packaging] ✅ Debounced dimensions saved");
-        } catch (err: unknown) {
-          console.error("[Packaging] ❌ Failed to save dimensions:", err);
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          console.error("[Packaging] Error details:", errorMessage);
-          setSaveError(`Failed to save: ${errorMessage}`);
-          setTimeout(() => setSaveError(null), 5000);
+        } finally {
+          pendingDimensionsRef.current = null;
         }
-        pendingDimensionsRef.current = null;
+      }, DIMENSION_SAVE_DEBOUNCE_MS);
+    },
+    [],
+  );
+
+  const handlePackageTypeChange = useCallback(
+    async (type: PackageType) => {
+      if (!packagingState) {
+        return;
       }
-    }, 1000); // 1 second debounce
-  }, []);
 
-  const handleDimensionChange = useCallback((key: keyof PackageDimensions, value: number) => {
-    const validValue = isNaN(value) || value < 0 ? 0 : value;
+      const targetShapeState = getShapeState(packagingState, type);
+      const targetDimensions = normalizePackageDimensions(
+        type,
+        targetShapeState.dimensions,
+      );
+      const targetModel = generatePackageModel(type, targetDimensions);
 
-    setDimensions(prev => {
-      const newDimensions = { ...prev, [key]: validValue };
-      // Update local packaging state to keep it in sync
-      setPackagingState(prevState => {
-        if (!prevState) return prevState;
-        
-        const updatedState = { ...prevState };
-        if (packageType === 'cylinder') {
-          updatedState.cylinder_state = {
-            ...prevState.cylinder_state,
-            dimensions: newDimensions
+      setPackageType(type);
+      setDimensions(targetDimensions);
+      setPackageModel(targetModel);
+      setSelectedPanelId(null);
+      setPanelTextures(
+        await loadCachedPanelTextures(targetModel, targetShapeState.panel_textures),
+      );
+      setPackagingState((previous) =>
+        previous ? { ...previous, current_package_type: type } : previous,
+      );
+
+      try {
+        await updatePackagingDimensions(type, targetDimensions);
+      } catch {
+        // Keep the local switch; the next hydration will reconcile persisted state.
+      }
+    },
+    [packagingState],
+  );
+
+  const handleDimensionChange = useCallback(
+    (key: keyof PackageDimensions, value: number) => {
+      const validValue = Number.isNaN(value) || value < 0 ? 0 : value;
+
+      setDimensions((previous) => {
+        const nextDimensions = { ...previous, [key]: validValue };
+
+        setPackagingState((previousState) => {
+          if (!previousState) {
+            return previousState;
+          }
+
+          if (packageType === "cylinder") {
+            return {
+              ...previousState,
+              cylinder_state: {
+                ...previousState.cylinder_state,
+                dimensions: nextDimensions,
+              },
+            };
+          }
+
+          return {
+            ...previousState,
+            box_state: {
+              ...previousState.box_state,
+              dimensions: nextDimensions,
+            },
           };
-        } else {
-          updatedState.box_state = {
-            ...prevState.box_state,
-            dimensions: newDimensions
-          };
-        }
-        return updatedState;
+        });
+
+        saveDimensionsDebounced(packageType, nextDimensions);
+        return nextDimensions;
       });
-
-      // Debounced save to backend
-      saveDimensionsDebounced(packageType, newDimensions);
-      return newDimensions;
-    });
-  }, [packageType, saveDimensionsDebounced]);
+    },
+    [packageType, saveDimensionsDebounced],
+  );
 
   const handleResetCurrentShape = useCallback(async () => {
     try {
       const result = await resetCurrentShape();
-      const defaultDims: PackageDimensions = {
-        width: result.dimensions.width || 100,
-        height: result.dimensions.height || 150,
-        depth: result.dimensions.depth || 100,
-      };
-      
-      // Clear texture cache when resetting
-      const { clearTextureCache } = await import('@/lib/texture-cache');
+      const defaultDimensions = normalizePackageDimensions(
+        packageType,
+        result.dimensions as Partial<PackageDimensions>,
+      );
+
       await clearTextureCache();
-      
-      // Clear textures and reset dimensions
       setPanelTextures({});
-      setDimensions(defaultDims);
-      
-      // Regenerate model with default dimensions
-      const newModel = generatePackageModel(packageType, defaultDims);
-      setPackageModel(newModel);
+      setDimensions(defaultDimensions);
+      setPackageModel(generatePackageModel(packageType, defaultDimensions));
       setSelectedPanelId(null);
-      
-      // Update local packaging state
-      setPackagingState(prevState => {
-        if (!prevState) return prevState;
-        
-        const resetState = {
-          dimensions: defaultDims,
-          panel_textures: {},
-        };
-        
+
+      setPackagingState((previousState) => {
+        if (!previousState) {
+          return previousState;
+        }
+
+        if (packageType === "cylinder") {
+          return {
+            ...previousState,
+            cylinder_state: {
+              ...previousState.cylinder_state,
+              dimensions: defaultDimensions,
+              panel_textures: {},
+            },
+          };
+        }
+
         return {
-          ...prevState,
-          [packageType === 'box' ? 'box_state' : 'cylinder_state']: resetState,
+          ...previousState,
+          box_state: {
+            ...previousState.box_state,
+            dimensions: defaultDimensions,
+            panel_textures: {},
+          },
         };
       });
-      
-    } catch (error) {
-      console.error("[Packaging] Failed to reset shape:", error);
+    } catch {
+      // Leave the current local state intact when reset fails.
     }
   }, [packageType]);
 
   const handleDielineChange = useCallback((newDielines: DielinePath[]) => {
-    setPackageModel((prev) => {
-      if (!prev) return prev;
-      return updateModelFromDielines(prev, newDielines);
+    setPackageModel((previous) => {
+      if (!previous) {
+        return previous;
+      }
+
+      return updateModelFromDielines(previous, newDielines);
     });
-    setHasManualDielineEdits(true); // Mark that user has manually edited dielines
   }, []);
 
-  const handleTextureGenerated = useCallback(async (panelId: PanelId, textureUrl: string) => {
-    // Clear cache for this panel first to ensure fresh load
-    try {
-      const { clearTextureCache } = await import('@/lib/texture-cache');
+  const handleTextureGenerated = useCallback(
+    async (panelId: PanelId, textureUrl: string) => {
       await clearTextureCache(panelId);
-    } catch (err) {
-      // Continue even if cache clear fails
-    }
-    
-    // Cache the new texture
+
+      try {
+        const cachedUrl = await getCachedTextureUrl(panelId, textureUrl);
+
+        setPanelTextures((previous) => ({ ...previous, [panelId]: cachedUrl }));
+        setPackageModel((previous) => {
+          if (!previous) {
+            return previous;
+          }
+
+          return {
+            ...previous,
+            panelStates: {
+              ...previous.panelStates,
+              [panelId]: {
+                ...previous.panelStates[panelId],
+                textureUrl: cachedUrl,
+              },
+            },
+          };
+        });
+
+        setShowTextureNotification({ panelId, show: true });
+
+        if (notificationTimeoutRef.current) {
+          clearTimeout(notificationTimeoutRef.current);
+        }
+
+        notificationTimeoutRef.current = setTimeout(() => {
+          setShowTextureNotification(null);
+        }, TEXTURE_NOTIFICATION_TIMEOUT_MS);
+      } catch {
+        // Ignore cache failures; the backend state remains the source of truth.
+      }
+    },
+    [],
+  );
+
+  const handleSaveProject = useCallback(async () => {
     try {
-      const cachedUrl = await getCachedTextureUrl(panelId, textureUrl);
-      
-      setPanelTextures((prev) => ({ ...prev, [panelId]: cachedUrl }));
-    
-      setPackageModel((prev) => {
-        if (!prev) return prev;
-        return {
-      ...prev,
-      panelStates: {
-        ...prev.panelStates,
-        [panelId]: {
-          ...prev.panelStates[panelId],
-              textureUrl: cachedUrl,
-        },
-      },
-        };
-      });
-
-    setShowTextureNotification({ panelId, show: true });
-    setTimeout(() => setShowTextureNotification(null), 3000);
-    } catch (err) {
-      console.error(`Failed to cache texture for ${panelId}:`, err);
+      setIsSavingProject(true);
+      await persistDimensionsNow();
+      const savedProject = await saveCurrentProject({ lastRoute: "/packaging" });
+      setCurrentProject(savedProject);
+      setSaveMessage(`Saved ${new Date().toLocaleTimeString()}`);
+      if (saveMessageTimeoutRef.current) {
+        clearTimeout(saveMessageTimeoutRef.current);
+      }
+      saveMessageTimeoutRef.current = setTimeout(() => {
+        setSaveMessage(null);
+      }, 3000);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Failed to save project.");
+    } finally {
+      setIsSavingProject(false);
     }
-  }, []);
+  }, [persistDimensionsNow]);
 
-  const surfaceArea = useMemo(() => {
-    const { width, height, depth } = dimensions;
-    return packageType === "box"
-      ? Math.round(2 * (width * height + width * depth + height * depth))
-      : Math.round(Math.PI * width * height + 2 * Math.PI * (width / 2) ** 2);
-  }, [packageType, dimensions]);
+  const surfaceArea = useMemo(
+    () => calculatePackageSurfaceArea(packageType, dimensions),
+    [dimensions, packageType],
+  );
 
-  const volume = useMemo(() => {
-    const { width, height, depth } = dimensions;
-    return packageType === "box"
-      ? Math.round(width * height * depth)
-      : Math.round(Math.PI * (width / 2) ** 2 * height);
-  }, [packageType, dimensions]);
+  const volume = useMemo(
+    () => calculatePackageVolume(packageType, dimensions),
+    [dimensions, packageType],
+  );
 
-  // Show loading state until hydrated
   if (!isHydrated || !packageModel) {
     return (
       <div className="h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4" />
           <p className="text-muted-foreground">Loading packaging state...</p>
         </div>
       </div>
@@ -618,6 +725,29 @@ function Packaging() {
 
   return (
     <div className="h-screen bg-background flex flex-col overflow-hidden">
+      <div className="border-b-2 border-black bg-card px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
+              Packaging Workspace
+            </div>
+            <div className="mt-1 text-sm font-semibold">
+              {currentProject?.name ?? "Unsaved project"}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-xs text-muted-foreground">
+              {currentProject?.has_packaging ? "Packaging state linked to project" : "Save to add this packaging work to a project"}
+            </div>
+            <Button onClick={() => void handleSaveProject()} disabled={isSavingProject || isGenerating}>
+              {isSavingProject ? "Saving..." : "Save Project"}
+            </Button>
+            {saveMessage ? (
+              <div className="text-xs text-muted-foreground">{saveMessage}</div>
+            ) : null}
+          </div>
+        </div>
+      </div>
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="flex-1 overflow-hidden">
@@ -629,7 +759,7 @@ function Packaging() {
                 selectedPanelId={selectedPanelId}
                 onDielineChange={handleDielineChange}
                 onPanelSelect={setSelectedPanelId}
-                editable={true}
+                editable
                 panelTextures={panelTextures}
               />
             ) : (
@@ -640,20 +770,22 @@ function Packaging() {
                   onPanelSelect={setSelectedPanelId}
                   color="#60a5fa"
                   panelTextures={panelTextures}
-                  lightingMode={lightingMode}
-                  wireframe={displayMode === "wireframe"}
-                  zoomAction={zoomAction}
-                  autoRotate={autoRotate}
+                  lightingMode="studio"
+                  wireframe={false}
+                  autoRotate
                 />
 
                 {isGenerating && packagingState && (
                   <div className="absolute top-4 left-4 z-40 bg-black/80 text-white px-4 py-3 rounded-lg shadow-lg">
                     <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                       <div>
                         <p className="text-sm font-semibold">Generating Textures</p>
-                        {packagingState.generating_panels && packagingState.generating_panels.length > 0 && (
-                          <p className="text-xs opacity-80">{packagingState.generating_panels.length} panel(s) remaining</p>
+                        {packagingState.generating_panels.length > 0 && (
+                          <p className="text-xs opacity-80">
+                            {packagingState.generating_panels.length} panel(s)
+                            remaining
+                          </p>
                         )}
                       </div>
                     </div>
@@ -665,9 +797,14 @@ function Packaging() {
                     <div className="bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg flex items-center gap-3 border-2 border-green-700">
                       <CheckCircle2 className="w-5 h-5" />
                       <div>
-                        <p className="font-semibold">Texture Applied! 🎨</p>
+                        <p className="font-semibold">Texture Applied!</p>
                         <p className="text-sm opacity-90">
-                          {packageModel.panels.find(p => p.id === showTextureNotification.panelId)?.name} panel updated
+                          {
+                            packageModel.panels.find(
+                              (panel) => panel.id === showTextureNotification.panelId,
+                            )?.name
+                          }{" "}
+                          panel updated
                         </p>
                       </div>
                     </div>
@@ -680,23 +817,30 @@ function Packaging() {
 
         <div className="w-[380px] border-l-2 border-black bg-card overflow-hidden flex flex-col shrink-0">
           <Tabs defaultValue="chat" className="flex-1 flex flex-col">
-          <div className="border-b-2 border-black shrink-0 px-4 py-3">
+            <div className="border-b-2 border-black shrink-0 px-4 py-3">
               <TabsList className="w-full grid grid-cols-2 gap-2 bg-transparent p-0 h-auto">
-                <TabsTrigger value="chat" className="gap-2 border-2 border-black data-[state=active]:bg-black data-[state=active]:text-white data-[state=inactive]:bg-background shadow-none">
+                <TabsTrigger
+                  value="chat"
+                  className="gap-2 border-2 border-black data-[state=active]:bg-black data-[state=active]:text-white data-[state=inactive]:bg-background shadow-none"
+                >
                   <MessageSquare className="w-4 h-4" />
                   Chat
                 </TabsTrigger>
-                <TabsTrigger value="editor" className="gap-2 border-2 border-black data-[state=active]:bg-black data-[state=active]:text-white data-[state=inactive]:bg-background shadow-none">
+                <TabsTrigger
+                  value="editor"
+                  className="gap-2 border-2 border-black data-[state=active]:bg-black data-[state=active]:text-white data-[state=inactive]:bg-background shadow-none"
+                >
                   <Pencil className="w-4 h-4" />
                   Editor
                 </TabsTrigger>
               </TabsList>
-          </div>
+            </div>
 
-            {/* Chat Tab */}
-            <TabsContent value="chat" className="flex-1 overflow-y-auto p-4 flex flex-col space-y-4 mt-0">
-              {/* AI Chat */}
-              <AIChatPanel 
+            <TabsContent
+              value="chat"
+              className="flex-1 overflow-y-auto p-4 flex flex-col space-y-4 mt-0"
+            >
+              <AIChatPanel
                 selectedPanelId={selectedPanelId}
                 packageModel={packageModel}
                 onTextureGenerated={handleTextureGenerated}
@@ -705,53 +849,66 @@ function Packaging() {
                 isGenerating={isGenerating}
               />
 
-            {/* Panel Selection */}
-            {packageModel.panels.length > 0 && (
+              {packageModel.panels.length > 0 && (
                 <div className="border-2 border-black p-4 space-y-3">
-                <h3 className="text-sm font-semibold text-foreground">Select Panel</h3>
-                <div className="grid grid-cols-2 gap-2">
-                  {packageModel.panels.map((panel) => (
-                    <Button
-                      key={panel.id}
-                      variant={selectedPanelId === panel.id ? "default" : "outline"}
-                      className="text-xs"
-                      size="sm"
-                      onClick={() => setSelectedPanelId(panel.id === selectedPanelId ? null : panel.id)}
-                    >
-                      {panel.name}
-                      {panelTextures[panel.id] && (
-                        <span className="ml-1 text-[10px]">✨</span>
-                      )}
-                    </Button>
-                  ))}
-                </div>
-                {selectedPanelId && (
-                    <div className="mt-2 p-2 border-2 border-black text-xs">
-                    <p className="font-medium">
-                      {packageModel.panels.find((p) => p.id === selectedPanelId)?.name}
-                    </p>
-                    <p className="text-muted-foreground mt-1">
-                      {packageModel.panels.find((p) => p.id === selectedPanelId)?.description}
-                    </p>
+                  <h3 className="text-sm font-semibold text-foreground">
+                    Select Panel
+                  </h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    {packageModel.panels.map((panel) => (
+                      <Button
+                        key={panel.id}
+                        variant={
+                          selectedPanelId === panel.id ? "default" : "outline"
+                        }
+                        className="text-xs"
+                        size="sm"
+                        onClick={() =>
+                          setSelectedPanelId(
+                            panel.id === selectedPanelId ? null : panel.id,
+                          )
+                        }
+                      >
+                        {panel.name}
+                        {panelTextures[panel.id] && (
+                          <span className="ml-1 text-[10px]">*</span>
+                        )}
+                      </Button>
+                    ))}
                   </div>
-                )}
+                  {selectedPanelId && (
+                    <div className="mt-2 p-2 border-2 border-black text-xs">
+                      <p className="font-medium">
+                        {
+                          packageModel.panels.find(
+                            (panel) => panel.id === selectedPanelId,
+                          )?.name
+                        }
+                      </p>
+                      <p className="text-muted-foreground mt-1">
+                        {
+                          packageModel.panels.find(
+                            (panel) => panel.id === selectedPanelId,
+                          )?.description
+                        }
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </TabsContent>
 
-            {/* Editor Tab */}
             <PackagingEditor
               activeView={activeView}
-              setActiveView={setActiveView}
-              packageType={packageType}
-              handlePackageTypeChange={handlePackageTypeChange}
-              handleResetCurrentShape={handleResetCurrentShape}
               dimensions={dimensions}
               handleDimensionChange={handleDimensionChange}
+              handlePackageTypeChange={handlePackageTypeChange}
+              handleResetCurrentShape={handleResetCurrentShape}
               packageModel={packageModel}
+              packageType={packageType}
+              setActiveView={setActiveView}
               surfaceArea={surfaceArea}
               volume={volume}
-              packagingState={packagingState}
             />
           </Tabs>
         </div>

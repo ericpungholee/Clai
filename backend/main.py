@@ -35,17 +35,16 @@ try:
 except ImportError as e:
     logging.warning(f"Product router not available (missing dependencies): {e}")
 
+try:
+    from app.endpoints.projects.router import router as projects_router
+    app.include_router(projects_router)
+    logging.info("Projects router loaded")
+except ImportError as e:
+    logging.warning(f"Projects router not available (missing dependencies): {e}")
+
 # Packaging router is required for the chat panel feature
 app.include_router(packaging_router)
 logging.info("Packaging router loaded")
-
-# Demo router for seeding pre-generated state
-try:
-    from app.endpoints.demo.router import router as demo_router
-    app.include_router(demo_router)
-    logging.info("Demo router loaded")
-except ImportError as e:
-    logging.warning(f"Demo router not available: {e}")
 
 @app.get("/")
 def read_root():

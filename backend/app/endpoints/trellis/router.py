@@ -1,11 +1,12 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import List, Dict, Any, Literal, Optional
-
-from app.integrations.trellis import trellis_service, TrellisOutput
-from app.core.redis import redis_service
 import logging
 import traceback
+from typing import Any, Dict, List, Literal, Optional
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from app.core.redis import redis_service
+from app.integrations.trellis import TrellisOutput, trellis_service
 
 logger = logging.getLogger(__name__)
 
@@ -14,91 +15,106 @@ STATUS_KEY = "trellis_status:current"
 
 TRELLIS_PRESETS = {
     "balanced": {
-        "texture_size": 1024,
-        "mesh_simplify": 0.92,
-        "ss_sampling_steps": 14,
+        "resolution": 1024,
+        "texture_size": 2048,
+        "decimation_target": 500000,
+        "ss_sampling_steps": 12,
         "ss_guidance_strength": 7.5,
-        "slat_sampling_steps": 14,
-        "slat_guidance_strength": 3.5,
+        "shape_slat_sampling_steps": 12,
+        "shape_slat_guidance_strength": 7.5,
+        "tex_slat_sampling_steps": 12,
+        "tex_slat_guidance_strength": 1.0,
+        "remesh": True,
+        "remesh_band": 1.0,
     },
     "high_quality": {
-        "texture_size": 2048,
-        "mesh_simplify": 0.96,
-        "ss_sampling_steps": 26,
+        "resolution": 1536,
+        "texture_size": 4096,
+        "decimation_target": 750000,
+        "ss_sampling_steps": 20,
         "ss_guidance_strength": 8.0,
-        "slat_sampling_steps": 26,
-        "slat_guidance_strength": 3.2,
+        "shape_slat_sampling_steps": 20,
+        "shape_slat_guidance_strength": 8.0,
+        "tex_slat_sampling_steps": 16,
+        "tex_slat_guidance_strength": 1.0,
+        "remesh": True,
+        "remesh_band": 1.0,
     },
 }
+
 
 class Generate3DRequest(BaseModel):
     images: List[str]
     seed: int = 1337
+    resolution: Optional[int] = None
     texture_size: Optional[int] = None
-    mesh_simplify: Optional[float] = None
+    decimation_target: Optional[int] = None
     ss_sampling_steps: Optional[int] = None
     ss_guidance_strength: Optional[float] = None
-    slat_sampling_steps: Optional[int] = None
-    slat_guidance_strength: Optional[float] = None
+    shape_slat_sampling_steps: Optional[int] = None
+    shape_slat_guidance_strength: Optional[float] = None
+    tex_slat_sampling_steps: Optional[int] = None
+    tex_slat_guidance_strength: Optional[float] = None
+    remesh: Optional[bool] = None
+    remesh_band: Optional[float] = None
     quality: Literal["balanced", "high_quality"] = "balanced"
     use_multi_image: Optional[bool] = None
-    multiimage_algo: Literal["stochastic", "multidiffusion"] = "stochastic"
+
 
 @router.post("/generate", response_model=TrellisOutput)
 async def generate_3d_asset(request: Generate3DRequest):
-    """
-    Generate a 3D asset from input images using Trellis.
-    
-    Returns various outputs based on the generation flags:
-    - model_file: GLB 3D model (if generate_model=True)
-    - color_video: Color render video (if generate_color=True)
-    - gaussian_ply: Gaussian point cloud (if save_gaussian_ply=True)
-    - normal_video: Normal render video (if generate_normal=True)
-    - combined_video: Combined video
-    - no_background_images: Preprocessed images (if return_no_background=True)
-    """
+    """Generate a 3D asset from input images using Trellis."""
+
     try:
         logger.info("=" * 80)
         logger.info("TRELLIS REQUEST PARAMETERS:")
-        logger.info(f"  images: {request.images}")
+        logger.info("  image_count: %s", len(request.images))
+        logger.info("  quality: %s", request.quality)
         logger.info("=" * 80)
 
         _set_status(
             {
                 "status": "processing",
                 "progress": 5,
-                "message": "Submitting job to Trellis…",
+                "message": "Submitting job to Trellis...",
             }
         )
 
         preset = TRELLIS_PRESETS.get(request.quality, TRELLIS_PRESETS["balanced"]).copy()
-        config = {**preset}
         overrides = {
+            "resolution": request.resolution,
             "texture_size": request.texture_size,
-            "mesh_simplify": request.mesh_simplify,
+            "decimation_target": request.decimation_target,
             "ss_sampling_steps": request.ss_sampling_steps,
             "ss_guidance_strength": request.ss_guidance_strength,
-            "slat_sampling_steps": request.slat_sampling_steps,
-            "slat_guidance_strength": request.slat_guidance_strength,
+            "shape_slat_sampling_steps": request.shape_slat_sampling_steps,
+            "shape_slat_guidance_strength": request.shape_slat_guidance_strength,
+            "tex_slat_sampling_steps": request.tex_slat_sampling_steps,
+            "tex_slat_guidance_strength": request.tex_slat_guidance_strength,
+            "remesh": request.remesh,
+            "remesh_band": request.remesh_band,
         }
         for key, value in overrides.items():
             if value is not None:
-                config[key] = value
+                preset[key] = value
 
         use_multi = request.use_multi_image if request.use_multi_image is not None else len(request.images) > 1
-        multi_algo = request.multiimage_algo
 
         output = trellis_service.generate_3d_asset(
             images=request.images,
             seed=request.seed,
-            texture_size=config["texture_size"],
-            mesh_simplify=config["mesh_simplify"],
-            ss_sampling_steps=config["ss_sampling_steps"],
-            ss_guidance_strength=config["ss_guidance_strength"],
-            slat_sampling_steps=config["slat_sampling_steps"],
-            slat_guidance_strength=config["slat_guidance_strength"],
+            resolution=preset["resolution"],
+            texture_size=preset["texture_size"],
+            decimation_target=preset["decimation_target"],
+            ss_sampling_steps=preset["ss_sampling_steps"],
+            ss_guidance_strength=preset["ss_guidance_strength"],
+            shape_slat_sampling_steps=preset["shape_slat_sampling_steps"],
+            shape_slat_guidance_strength=preset["shape_slat_guidance_strength"],
+            tex_slat_sampling_steps=preset["tex_slat_sampling_steps"],
+            tex_slat_guidance_strength=preset["tex_slat_guidance_strength"],
+            remesh=preset["remesh"],
+            remesh_band=preset["remesh_band"],
             use_multi_image=use_multi,
-            multiimage_algo=multi_algo,
         )
         logger.info("Successfully generated 3D asset")
         _set_status(
@@ -112,24 +128,23 @@ async def generate_3d_asset(request: Generate3DRequest):
             }
         )
         return output
-    except Exception as e:
-        logger.error(f"Error generating 3D asset: {str(e)}")
+    except Exception as exc:
+        logger.error("Error generating 3D asset: %s", exc)
         logger.error(traceback.format_exc())
         _set_status(
             {
                 "status": "error",
                 "progress": 0,
-                "message": f"Generation failed: {str(e)}",
+                "message": f"Generation failed: {exc}",
             }
         )
-        raise HTTPException(status_code=500, detail=f"Failed to generate 3D asset: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate 3D asset: {exc}")
 
 
 @router.get("/status")
 async def get_generation_status():
-    """
-    Retrieve the status of the most recent Trellis generation job.
-    """
+    """Retrieve the status of the most recent Trellis generation job."""
+
     status = redis_service.get_json(STATUS_KEY)
     if not status:
         return {"status": "idle", "progress": 0, "message": "No generation started"}
@@ -138,5 +153,3 @@ async def get_generation_status():
 
 def _set_status(payload: Dict[str, Any]) -> None:
     redis_service.set_json(STATUS_KEY, payload, ex=3600)
-
-

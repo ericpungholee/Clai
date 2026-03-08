@@ -1,134 +1,107 @@
-# Vril — AI-Powered Product Design Studio
+# Vril
 
-**One-Liner:** Vril lets anyone become a physical product designer with the help of AI.
-## Demo Video
-[![YouTube Video](https://img.youtube.com/vi/-yTFJw_ekxk/0.jpg)](https://www.youtube.com/watch?v=-yTFJw_ekxk)
+AI-assisted physical product design workspace for product concepts, 3D drafts, packaging, and export.
 
-## The Problem
+## Demo
 
-Designing physical products is slow, expensive, and requires specialized skills.
+[![Demo Video](https://img.youtube.com/vi/-yTFJw_ekxk/0.jpg)](https://www.youtube.com/watch?v=-yTFJw_ekxk)
 
-Even designing simple items like a mug, water bottle, or shoe box needs:
-- 3D modeling software knowledge
-- Iteration cycles
-- Hours of manual work
+## What The App Does
 
-Most people with ideas—event organizers, small businesses, artists, non-profits—don't have the expertise or time to create satisfying product designs. Traditional tools prevent everyday people from tapping into their creative potential.
+Vril turns a rough product idea into a structured design workflow instead of a one-shot image-to-3D pipeline.
 
-## The Solution
+Current product flow:
 
-Vril is a product design studio that creates and iterates 3D products + packaging just from plain English.
+1. User prompt -> structured design brief
+2. Design brief -> concept directions
+3. User selects or refines a concept
+4. Selected concept -> controlled reference image set
+5. Reference set -> Trellis 3D draft
+6. Draft enters the editor as the long-lived workspace
+7. Later AI edits create versioned changes instead of restarting from zero
 
-**Step 1:** Users describe or upload references, and Vril generates a fully editable 3D product model.
+Packaging remains a separate workflow with its own state, panel texture generation, dielines, and exports.
 
-**Step 2:** A built-in editor with a Cursor-style chatbot lets users iterate the shape, form, and material of the product through simple prompts.
+## Current Stack
 
-**Step 3:** Users design packaging with the help of AI. With editable textures, dielines, artwork, and dimensions, all controlled through AI.
+### Frontend
 
-**Step 4:** Vril allows users to export the finished designs in various file formats.
+- Next.js `16.1.1`
+- React `19`
+- TypeScript `5`
+- Tailwind CSS `4`
+- Radix UI
+- `@react-three/fiber`, `@react-three/drei`, `three`
 
-**Vril turns anyone into a product designer.**
+### Backend
 
-## Example Use Case
+- FastAPI
+- Pydantic models
+- Redis-backed session state
+- Gemini for image generation
+- Trellis for 3D draft generation
+- File export utilities with lazy CairoSVG gating
 
-Imagine the Hack Western organizers want to create custom swag, like a Hack Western Cup. But:
-- They don't know 3D design
-- They don't have time
-- Hiring a designer is slow and expensive
+## Key Product Architecture
 
-With Vril, they simply type:
+The product workflow is now stage-aware and design-state-first.
 
-> "Create a ceramic mug with a matte black finish and a Hack Western 12 logo → Make the handle thicker."
+- `backend/app/models/product_state.py`
+  Stores the authoritative product workflow state, including `design_brief`, `concept_directions`, `selected_concept_id`, `reference_set`, `workflow_stage`, `ai_operations`, `version_history`, and editor metadata.
+- `backend/app/services/product_pipeline.py`
+  Orchestrates stage-specific product actions such as brief creation, concept generation, concept refinement, reference generation, 3D draft generation, and structured edits.
+- `backend/app/endpoints/product/router.py`
+  Exposes state-aware product routes such as create, concept refine/select, reference generation, draft generation, edit, rewind, recover, and export.
+- `frontend/app/product/page.tsx`
+  Renders the stage-aware workspace for brief, concepts, references, draft generation, editor state, version history, and operation history.
+- `frontend/components/ProductAIChatPanel.tsx`
+  Dispatches structured product actions instead of acting as a generic prompt box.
+- `frontend/app/packaging/page.tsx`
+  Owns the packaging workflow and remains separate from product editing logic.
+- `frontend/app/final-view/page.tsx`
+  Composes product and packaging outputs for final review and export.
 
-Vril instantly generates the 3D mug, lets them iterate the shape and prints, and designs the packaging for it.
+## Repository Layout
 
-**They get a real product design in minutes—not days.**
-
-Making product design accessible and easy for all.
-
----
-
-## Technical Architecture
-
-### Frontend (Next.js + React)
-- **Framework:** Next.js 14 with TypeScript
-- **3D Rendering:** Three.js + React Three Fiber for interactive product visualization
-- **UI:** Tailwind CSS with shadcn/ui components
-- **Key Features:**
-  - Real-time 3D product viewer with material controls
-  - Interactive packaging editor with live dieline visualization
-  - AI chat interface for iterative design modifications
-  - Texture cache system for optimized image loading
-
-### Backend (FastAPI + Python)
-- **Framework:** FastAPI with async support
-- **AI Integration:** Google Gemini for image generation and design iteration
-- **State Management:** Persistent packaging state with atomic updates
-- **Key Services:**
-  - `panel_generation.py`: Parallelized texture generation for packaging panels
-  - `panel_prompt_templates.py`: Structured prompt engineering with guardrails
-  - `product_generation.py`: 3D product model creation and iteration
-  - `dieline_generation.py`: SVG dieline generation for packaging templates
-
-### Codebase Structure
-
-```
-vril/
-├── frontend/
-│   ├── app/                    # Next.js pages and routes
-│   │   ├── packaging/          # Packaging design interface
-│   │   └── products/           # Product creation interface
-│   ├── components/             # React components
-│   │   ├── package-viewer-3d.tsx    # 3D packaging preview
-│   │   ├── dieline-editor.tsx       # Interactive dieline editor
-│   │   └── AIChatPanel.tsx          # Cursor-style AI chat
-│   ├── hooks/                  # Custom React hooks
-│   │   └── usePanelTexture.ts       # Texture loading and caching
-│   └── lib/                    # API clients and utilities
-│
-├── backend/
-│   ├── app/
-│   │   ├── endpoints/          # API routes
-│   │   │   ├── packaging/      # Packaging generation endpoints
-│   │   │   └── products/       # Product generation endpoints
-│   │   ├── services/           # Business logic
-│   │   │   ├── panel_generation.py          # Texture generation
-│   │   │   ├── panel_prompt_templates.py    # Prompt engineering
-│   │   │   └── product_generation.py        # 3D model generation
-│   │   ├── models/             # Data models and state management
-│   │   └── integrations/       # External API integrations (Gemini)
-│   └── main.py                 # FastAPI app entry point
-│
-└── docs/                       # Technical documentation
+```text
+Clai/
+|-- frontend/
+|   |-- app/
+|   |   |-- page.tsx
+|   |   |-- product/
+|   |   |-- packaging/
+|   |   `-- final-view/
+|   |-- components/
+|   |-- hooks/
+|   `-- lib/
+|       |-- api-client.ts
+|       |-- api-config.ts
+|       |-- product-api.ts
+|       `-- packaging-helpers.ts
+|-- backend/
+|   |-- app/
+|   |   |-- endpoints/
+|   |   |-- integrations/
+|   |   |-- models/
+|   |   `-- services/
+|   |-- tests/
+|   |-- main.py
+|   `-- requirements.txt
+`-- README.md
 ```
 
-### Key Technical Innovations
+## Requirements
 
-1. **Two-Phase Parallelized Generation:**
-   - Phase 1: Generate single 3D mockup of entire package
-   - Phase 2: Extract all panel textures simultaneously using `asyncio.gather()`
-   - Result: 6x faster generation with consistent design across panels
+- Node.js `20.9+`
+- npm
+- Python `3.10+`
+- Redis
 
-2. **Structured Prompt Engineering:**
-   - Template-based prompts with validation and guardrails
-   - Context-aware generation for create vs. edit workflows
-   - Full-bleed edge-to-edge design requirements
+Docker is optional if you prefer containerized backend setup.
 
-3. **Persistent State with Atomic Updates:**
-   - Multi-shape state management (box/cylinder)
-   - Atomic texture updates to prevent race conditions
-   - Texture persistence during regeneration
+## Local Development
 
-4. **Interactive 3D Workflow:**
-   - Real-time material and texture preview
-   - Live dieline editing with dimension arcs
-   - Texture cache for instant switching between designs
-
----
-
-## Getting Started
-
-### Frontend Setup
+### 1. Frontend
 
 ```bash
 cd frontend
@@ -136,75 +109,92 @@ npm install
 npm run dev
 ```
 
-The frontend will run at `http://localhost:3000`
+Frontend runs on `http://localhost:3000`.
 
-### Backend Setup
+### 2. Backend
 
-**Local Development:**
 ```bash
 cd backend
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
+copy env.example .env
 uvicorn main:app --reload
 ```
 
-**Docker:**
+Backend runs on `http://localhost:8000`.
+
+### 3. Backend With Docker
+
 ```bash
 cd backend
-docker-compose up --build
+docker compose up --build
 ```
 
-The backend API will run at `http://localhost:8000`
+## Environment Variables
 
-### Environment Variables
+Add these in `backend/.env`:
 
-Create a `.env` file in the backend directory:
-```
-GEMINI_API_KEY=your_gemini_api_key_here
+```env
 FAL_KEY=your_fal_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
+REDIS_URL=redis://localhost:6379/0
 ```
 
-### Demo Mode (Save Artifacts Locally)
+Optional backend flags already supported:
 
-To save all generated models, images, and videos to your local filesystem for demos/presentations:
+- `SAVE_ARTIFACTS_LOCALLY=true`
+- `GEMINI_FLASH_MODEL=gemini-3.1-flash-image-preview`
+- `GEMINI_PRO_MODEL=gemini-3.1-flash-image-preview`
 
-**Option 1: Using Demo Mode Script (Recommended)**
+## Useful Commands
+
 ```bash
-# Start backend in demo mode with artifact saving enabled
-./backend/start_demo_mode.sh
+# Frontend
+cd frontend
+npm run build
+npm run lint
 
-# All artifacts will be saved to: backend/tests/artifacts/
-# Each generation creates timestamped folders:
-#   - gemini_create_*/gemini_edit_* (AI images)
-#   - trellis_create_*/trellis_edit_* (3D models, videos, state.json)
+# Backend
+cd backend
+python -m pytest
+uvicorn main:app --reload
 ```
 
-**Option 2: Manual Setup**
+## Packaging Workflow
+
+Packaging is intentionally separate from product generation.
+
+- shape state is persisted independently
+- panel texture generation stays isolated from product edit logic
+- final export composes product and packaging without merging their session states
+
+## Artifact Saving
+
+To save generated assets locally for debugging:
+
 ```bash
-# Add to backend/.env:
-SAVE_ARTIFACTS_LOCALLY=true
-
-# Then restart normally
-docker compose -f backend/docker-compose.yml restart
+cd backend
+set SAVE_ARTIFACTS_LOCALLY=true
+uvicorn main:app --reload
 ```
 
-**Option 3: One-Off Demo Session**
+Or use the helper script:
+
 ```bash
-# Docker
-SAVE_ARTIFACTS_LOCALLY=true docker compose -f backend/docker-compose.yml up
+Artifacts are written under `backend/tests/artifacts/`.
 
-# Local (uvicorn)
-SAVE_ARTIFACTS_LOCALLY=true uvicorn main:app --reload
-```
+## Verification Baseline
 
-Artifacts are saved to `backend/tests/artifacts/` with timestamps for easy browsing.
+The current baseline after the Next.js update is:
 
----
+- frontend pinned to `next@16.1.1`
+- frontend pinned to `eslint-config-next@16.1.1`
+- backend tests pass with `python -m pytest`
+- frontend production build passes with `npm run build`
 
-## Tech Stack
+## Notes
 
-- **Frontend:** Next.js, React, TypeScript, Three.js, Tailwind CSS
-- **Backend:** FastAPI, Python, asyncio
-- **AI:** Google Gemini (image generation)
-- **3D:** React Three Fiber, Three.js
-- **State:** React hooks, FastAPI state management
-
+- The frontend is intentionally kept on the existing App Router + React 19 + Tailwind 4 stack.
+- Product and packaging workflows stay separate by design.
+- The editor is the primary product workspace after the first draft exists.

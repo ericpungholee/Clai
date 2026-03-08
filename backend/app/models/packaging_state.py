@@ -210,6 +210,12 @@ def save_packaging_state(state: PackagingState) -> None:
     """Persist the session state back to Redis."""
     state.updated_at = _utcnow()
     redis_service.set_json(PACKAGING_STATE_KEY, state.as_json())
+    try:
+        from app.services.project_store import sync_current_project_packaging_state
+
+        sync_current_project_packaging_state(state)
+    except Exception:
+        pass
 
 
 def clear_packaging_state() -> PackagingState:

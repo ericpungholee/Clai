@@ -3,8 +3,6 @@ import logging
 import base64
 from typing import Dict, Any, List, Optional
 
-from pydantic import ValidationError
-
 from google import genai
 from google.genai import types
 
@@ -34,15 +32,14 @@ class GeminiImageService:
             self.client = None
             logger.warning("Gemini API key not found for Image Service")
         
-        # Model references (workflow determines which to use)
-        self.flash_model = settings.GEMINI_FLASH_MODEL
-        self.pro_model = settings.GEMINI_PRO_MODEL
+        # Use a single image model for both create and edit flows.
+        self.image_model = settings.GEMINI_FLASH_MODEL
         
         # Image generation settings
         self.image_size = settings.GEMINI_IMAGE_SIZE
         self.aspect_ratio = settings.GEMINI_IMAGE_ASPECT_RATIO
         
-        logger.info(f"[gemini-image] Initialized with Pro model: {self.pro_model}, Flash model: {self.flash_model}")
+        logger.info(f"[gemini-image] Initialized with image model: {self.image_model}")
 
     def generate_product_images_sync(
         self,
@@ -67,18 +64,13 @@ class GeminiImageService:
         if not self.client:
             raise GeminiError("Gemini client not initialized for product images")
         
-        # Workflow-based model selection (hardcoded policy)
-        # Note: Image generation models don't support thinking levels, so we disable it
-        if workflow == "create":
-            model_to_use = self.pro_model
-            thinking = None  # Image generation models don't support thinking
-            logger.info(f"[gemini] CREATE workflow: using {model_to_use} (thinking disabled for image models)")
-        elif workflow == "edit":
-            model_to_use = self.flash_model
-            thinking = None  # Flash doesn't support thinking
-            logger.info(f"[gemini] EDIT workflow: using {model_to_use} (thinking disabled)")
-        else:
+        if workflow not in {"create", "edit"}:
             raise ValueError(f"Unknown workflow: {workflow}. Expected 'create' or 'edit'")
+        model_to_use = self.image_model
+        thinking = None  # Gemini image models do not support thinking controls here.
+        logger.info(
+            f"[gemini] {workflow.upper()} workflow: using {model_to_use} (single-model image pipeline)"
+        )
         
         valid_images = []
         

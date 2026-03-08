@@ -13,17 +13,33 @@ interface TestModelViewerProps {
   error?: string | null;
 }
 
+type MeshMaterial = THREE.Material | THREE.Material[];
+
+function cloneMaterial(material: MeshMaterial): MeshMaterial {
+  return Array.isArray(material)
+    ? material.map((entry) => entry.clone())
+    : material.clone();
+}
+
+function asMaterialArray(material: MeshMaterial): THREE.Material[] {
+  return Array.isArray(material) ? material : [material];
+}
+
+function isMeshWithMaterial(object: THREE.Object3D): object is THREE.Mesh {
+  return "isMesh" in object && Boolean((object as THREE.Mesh).isMesh);
+}
+
 function Model({
   url,
   wireframe,
-  showColor,
 }: {
   url: string;
   wireframe: boolean;
-  showColor: boolean;
 }) {
   const { scene } = useGLTF(url);
-  const [originalMaterials] = useState<Map<any, any>>(new Map());
+  const [originalMaterials] = useState<Map<THREE.Mesh, MeshMaterial>>(
+    new Map(),
+  );
 
   // Clone the scene to avoid modifying cached materials
   // Use useMemo to prevent re-cloning on every render
@@ -45,10 +61,9 @@ function Model({
   // Store original materials on first render
   useEffect(() => {
     if (originalMaterials.size === 0) {
-      clonedScene.traverse((child: any) => {
-        if (child.isMesh && child.material) {
-          // Clone and store the original material
-          originalMaterials.set(child, child.material.clone());
+      clonedScene.traverse((child) => {
+        if (isMeshWithMaterial(child) && child.material) {
+          originalMaterials.set(child, cloneMaterial(child.material));
         }
       });
     }
@@ -56,37 +71,54 @@ function Model({
 
   // Apply wireframe and color settings to all meshes in the scene
   useEffect(() => {
-    clonedScene.traverse((child: any) => {
-      if (child.isMesh && child.material) {
-        const originalMaterial = originalMaterials.get(child);
-        
-        if (!originalMaterial) return;
+    clonedScene.traverse((child) => {
+      if (!isMeshWithMaterial(child) || !child.material) {
+        return;
+      }
+
+      const originalMaterial = originalMaterials.get(child);
+      if (!originalMaterial) {
+        return;
+      }
+
+      const nextMaterial = cloneMaterial(originalMaterial);
+
+      for (const material of asMaterialArray(nextMaterial)) {
+        if ("wireframe" in material) {
+          material.wireframe = wireframe;
+        }
 
         if (wireframe) {
-          // Wireframe mode: holographic green wireframe
-          // Clone from original to avoid stale state
-          const wireMaterial = originalMaterial.clone();
-          wireMaterial.wireframe = true;
-          wireMaterial.color.set("#67B68B"); // Holographic green
-          if (wireMaterial.emissive) wireMaterial.emissive.set("#67B68B"); // Glowing effect
-          
-          // Only set these if the material supports them
-          if ("metalness" in wireMaterial) wireMaterial.metalness = 0.3;
-          if ("roughness" in wireMaterial) wireMaterial.roughness = 0.7;
-          if ("emissiveIntensity" in wireMaterial) wireMaterial.emissiveIntensity = 0.2;
+          if ("color" in material && material.color instanceof THREE.Color) {
+            material.color.set("#67B68B");
+          }
 
-          wireMaterial.needsUpdate = true;
-          child.material = wireMaterial;
-        } else {
-          // Base Texture Mode: restore original material with full color
-          const colorMaterial = originalMaterial.clone();
-          colorMaterial.wireframe = false; // Explicitly disable wireframe
-          colorMaterial.needsUpdate = true;
-          child.material = colorMaterial;
+          if (
+            "emissive" in material &&
+            material.emissive instanceof THREE.Color
+          ) {
+            material.emissive.set("#67B68B");
+          }
+
+          if ("metalness" in material) {
+            material.metalness = 0.3;
+          }
+
+          if ("roughness" in material) {
+            material.roughness = 0.7;
+          }
+
+          if ("emissiveIntensity" in material) {
+            material.emissiveIntensity = 0.2;
+          }
         }
+
+        material.needsUpdate = true;
       }
+
+      child.material = nextMaterial;
     });
-  }, [clonedScene, wireframe, showColor, originalMaterials]);
+  }, [clonedScene, originalMaterials, wireframe]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -241,7 +273,6 @@ export default function TestModelViewer({
               key={modelUrl}
               url={modelUrl}
               wireframe={wireframe}
-              showColor={showColor}
             />
           ) : (
             <LoadingPlaceholder />

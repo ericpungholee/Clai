@@ -2,16 +2,21 @@
 
 import logging
 import math
-import os
 import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import trimesh
-from PIL import Image
-import cairosvg
 import io
+from PIL import Image
+
+try:
+    import cairosvg  # type: ignore[import-not-found]
+    _CAIROSVG_IMPORT_ERROR: Optional[BaseException] = None
+except (ImportError, OSError) as exc:  # pragma: no cover - environment-dependent
+    cairosvg = None
+    _CAIROSVG_IMPORT_ERROR = exc
 
 from app.models.packaging_state import PackagingState
 from app.models.product_state import ProductState
@@ -21,6 +26,16 @@ logger = logging.getLogger(__name__)
 # Directory for storing exported files temporarily
 EXPORT_DIR = Path(tempfile.gettempdir()) / "hw12_exports"
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _require_cairosvg():
+    """Return CairoSVG or raise a helpful runtime error when native Cairo is missing."""
+    if cairosvg is None:
+        raise RuntimeError(
+            "Dieline export requires CairoSVG and native Cairo libraries. "
+            "Install Cairo to enable PDF/JPG dieline exports."
+        ) from _CAIROSVG_IMPORT_ERROR
+    return cairosvg
 
 
 def _download_glb(url: str) -> bytes:
@@ -390,6 +405,7 @@ def export_dieline_formats(packaging_state: PackagingState, session_id: str) -> 
     
     Returns dict mapping format -> file path.
     """
+    svg_renderer = _require_cairosvg()
     svg_content = _generate_dieline_svg(packaging_state)
     
     export_files = {}
@@ -403,7 +419,7 @@ def export_dieline_formats(packaging_state: PackagingState, session_id: str) -> 
     # Export PDF
     pdf_path = base_path.with_suffix(".pdf")
     try:
-        cairosvg.svg2pdf(bytestring=svg_content.encode("utf-8"), write_to=str(pdf_path))
+        svg_renderer.svg2pdf(bytestring=svg_content.encode("utf-8"), write_to=str(pdf_path))
         logger.info(f"[file-export] Exported PDF to {pdf_path}")
     except Exception as e:
         logger.error(f"[file-export] Failed to export PDF: {e}")
@@ -412,7 +428,7 @@ def export_dieline_formats(packaging_state: PackagingState, session_id: str) -> 
     # Export JPG
     jpg_path = base_path.with_suffix(".jpg")
     try:
-        png_data = cairosvg.svg2png(bytestring=svg_content.encode("utf-8"))
+        png_data = svg_renderer.svg2png(bytestring=svg_content.encode("utf-8"))
         img = Image.open(io.BytesIO(png_data))
         rgb_img = img.convert("RGB")
         rgb_img.save(jpg_path, "JPEG", quality=95)

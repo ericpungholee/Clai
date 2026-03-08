@@ -1,10 +1,11 @@
-"""Redis client wrapper that prefers a hosted REDIS_URL with in-memory fallback."""
+"""Redis client wrapper that prefers REDIS_URL with file-backed local fallback."""
 
 from __future__ import annotations
 
 import json
 import logging
 import os
+from pathlib import Path
 
 import redis
 from redis.exceptions import RedisError
@@ -13,6 +14,7 @@ from app.core.config import settings
 
 # Default to local Redis instance
 _DEFAULT_REDIS_URL = "redis://127.0.0.1:6379/0"
+_FALLBACK_STORE_PATH = Path(__file__).resolve().parents[2] / "data" / "redis_fallback.json"
 
 
 def _resolve_redis_url() -> str:
@@ -31,17 +33,39 @@ logger = logging.getLogger(__name__)
 
 
 class RedisService:
-    """Thin Redis client with graceful degradation to an in-memory store."""
+    """Thin Redis client with graceful degradation to a persisted local store."""
 
     def __init__(self, redis_url: str | None = None):
         self._url = redis_url or _resolve_redis_url()
         self.client = self._create_client(self._url)
-        self._fallback_store: dict[str, str] = {}
+        self._fallback_store: dict[str, str] = self._load_fallback_store()
         self._use_fallback = False
 
     @staticmethod
     def _create_client(redis_url: str) -> redis.Redis:
         return redis.from_url(redis_url, decode_responses=True)
+
+    @staticmethod
+    def _load_fallback_store() -> dict[str, str]:
+        try:
+            if not _FALLBACK_STORE_PATH.exists():
+                return {}
+            payload = json.loads(_FALLBACK_STORE_PATH.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return {}
+            return {str(key): str(value) for key, value in payload.items()}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _persist_fallback_store(self) -> None:
+        try:
+            _FALLBACK_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _FALLBACK_STORE_PATH.write_text(
+                json.dumps(self._fallback_store, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to persist Redis fallback store: %s", exc)
 
     def get(self, key: str) -> str | None:
         try:
@@ -56,11 +80,13 @@ class RedisService:
         try:
             if self._use_fallback:
                 self._fallback_store[key] = value
+                self._persist_fallback_store()
                 return True
             return self.client.set(key, value, ex=ex)
         except RedisError:
             self._use_fallback = True
             self._fallback_store[key] = value
+            self._persist_fallback_store()
             return True
 
     def set_json(self, key: str, value: object, ex: int | None = None) -> bool:
@@ -73,21 +99,29 @@ class RedisService:
         try:
             if self._use_fallback:
                 self._fallback_store[key] = value
+                self._persist_fallback_store()
                 return True
             return self.client.setex(key, time, value)
         except RedisError:
             self._use_fallback = True
             self._fallback_store[key] = value
+            self._persist_fallback_store()
             return True
 
     def delete(self, key: str) -> int:
         if self._use_fallback:
-            return 1 if self._fallback_store.pop(key, None) is not None else 0
+            deleted = 1 if self._fallback_store.pop(key, None) is not None else 0
+            if deleted:
+                self._persist_fallback_store()
+            return deleted
         try:
             return self.client.delete(key)
         except RedisError:
             self._use_fallback = True
-            return 1 if self._fallback_store.pop(key, None) is not None else 0
+            deleted = 1 if self._fallback_store.pop(key, None) is not None else 0
+            if deleted:
+                self._persist_fallback_store()
+            return deleted
 
     def get_json(self, key: str, default: object | None = None) -> object | None:
         """Return JSON-decoded payload with graceful fallback."""
@@ -137,6 +171,7 @@ class RedisService:
                 current = int(self._fallback_store.get(key, 0))
                 new_val = current + amount
                 self._fallback_store[key] = str(new_val)
+                self._persist_fallback_store()
                 return new_val
             return self.client.incr(key, amount)
         except RedisError:
@@ -144,6 +179,7 @@ class RedisService:
             current = int(self._fallback_store.get(key, 0))
             new_val = current + amount
             self._fallback_store[key] = str(new_val)
+            self._persist_fallback_store()
             return new_val
     
     def expire(self, key: str, time: int) -> bool:
@@ -161,11 +197,13 @@ class RedisService:
         try:
             if self._use_fallback:
                 self._fallback_store.clear()
+                self._persist_fallback_store()
                 return True
             return self.client.flushdb()
         except RedisError:
             self._use_fallback = True
             self._fallback_store.clear()
+            self._persist_fallback_store()
             return True
 
 

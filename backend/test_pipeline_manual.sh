@@ -1,13 +1,12 @@
 #!/bin/bash
 # Manual end-to-end test script for product pipeline
-# Hardcoded policy: Pro model for CREATE, Flash model for EDIT
+# Single-model policy: Flash image model for CREATE and EDIT
 # 
 # Usage: 
-#   ./test_pipeline_manual.sh                                # Default (Pro for create, Flash for edit)
+#   ./test_pipeline_manual.sh                                # Default flash image model
 #   IMAGE_COUNT=3 ./test_pipeline_manual.sh                  # Test with 3 images
 #   TEST_EDIT=1 ./test_pipeline_manual.sh                    # Test both create AND edit flows
-#   GEMINI_PRO_MODEL=gemini-3-pro ./test_pipeline_manual.sh  # Test with alternate Pro model
-#   GEMINI_FLASH_MODEL=gemini-2.5-flash-exp ./test_pipeline_manual.sh  # Test with alternate Flash
+#   GEMINI_FLASH_MODEL=gemini-3.1-flash-image-preview ./test_pipeline_manual.sh  # Test with alternate image model
 
 set -e
 
@@ -36,9 +35,9 @@ IMAGE_COUNT=${IMAGE_COUNT:-1}
 echo "📸 Using $IMAGE_COUNT image(s)"
 
 # Model configuration
-# Pro model used for CREATE flow, Flash model used for EDIT flow (hardcoded policy)
-export GEMINI_PRO_MODEL="${GEMINI_PRO_MODEL:-gemini-3-pro-image-preview}"
-export GEMINI_FLASH_MODEL="${GEMINI_FLASH_MODEL:-gemini-2.5-flash-image}"
+# Use the same Gemini image model for CREATE and EDIT flows.
+export GEMINI_FLASH_MODEL="${GEMINI_FLASH_MODEL:-gemini-3.1-flash-image-preview}"
+export GEMINI_PRO_MODEL="${GEMINI_PRO_MODEL:-$GEMINI_FLASH_MODEL}"
 export GEMINI_IMAGE_SIZE="${GEMINI_IMAGE_SIZE:-1K}"
 export GEMINI_THINKING_LEVEL="${GEMINI_THINKING_LEVEL:-low}"
 

@@ -1,10 +1,11 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { getPanelDimensions } from "@/lib/packaging-helpers"
 import { Loader2, Sparkles, X } from "lucide-react"
 import type { PanelId, PackageModel } from "@/lib/packaging-types"
 import { usePanelTexture } from "@/hooks/usePanelTexture"
@@ -24,29 +25,35 @@ export function PanelTextureGenerator({
   const [currentTexture, setCurrentTexture] = useState<string | null>(null)
   const { generateTexture, getTexture, deleteTexture, generating, error } = usePanelTexture()
 
-  // Load existing texture when panel changes
   useEffect(() => {
-    if (selectedPanelId) {
-      loadExistingTexture(selectedPanelId)
-    } else {
-      setCurrentTexture(null)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPanelId])
+    let isActive = true
 
-  const loadExistingTexture = async (panelId: PanelId) => {
-    try {
-      const texture = await getTexture(panelId)
-      if (texture) {
-        setCurrentTexture(texture.texture_url)
-      } else {
-        setCurrentTexture(null)
+    const syncTexture = async () => {
+      if (!selectedPanelId) {
+        if (isActive) {
+          setCurrentTexture(null)
+        }
+        return
       }
-    } catch (error) {
-      // Silently handle 404s - it's expected if no texture exists
-      setCurrentTexture(null)
+
+      try {
+        const texture = await getTexture(selectedPanelId)
+        if (isActive) {
+          setCurrentTexture(texture?.texture_url ?? null)
+        }
+      } catch {
+        if (isActive) {
+          setCurrentTexture(null)
+        }
+      }
     }
-  }
+
+    void syncTexture()
+
+    return () => {
+      isActive = false
+    }
+  }, [getTexture, selectedPanelId])
 
   const handleGenerate = async () => {
     if (!selectedPanelId || !prompt.trim()) return
@@ -54,43 +61,11 @@ export function PanelTextureGenerator({
     const panel = packageModel.panels.find((p) => p.id === selectedPanelId)
     if (!panel) return
 
-    // Calculate actual panel dimensions in mm based on package type and panel
-    let panelDimensions: { width: number; height: number }
-    
-    if (packageModel.type === "box") {
-      const { width, height, depth } = packageModel.dimensions
-      // Box panel dimensions based on panel type
-      if (selectedPanelId === "front" || selectedPanelId === "back") {
-        panelDimensions = { width, height }
-      } else if (selectedPanelId === "left" || selectedPanelId === "right") {
-        panelDimensions = { width: depth, height }
-      } else if (selectedPanelId === "top" || selectedPanelId === "bottom") {
-        panelDimensions = { width, height: depth }
-      } else {
-        // Fallback to bounds if unknown panel
-        panelDimensions = panel.bounds ? {
-          width: panel.bounds.maxX - panel.bounds.minX,
-          height: panel.bounds.maxY - panel.bounds.minY,
-        } : { width: 100, height: 100 }
-      }
-    } else {
-      // Cylinder
-      const { width, height } = packageModel.dimensions
-      if (selectedPanelId === "body") {
-        const circumference = Math.PI * width
-        panelDimensions = { width: circumference, height }
-      } else {
-        // Top or bottom - circular
-        const radius = width / 2
-        panelDimensions = { width: radius * 2, height: radius * 2 }
-      }
-    }
-
     const texture = await generateTexture({
       panel_id: selectedPanelId,
       prompt: prompt.trim(),
       package_type: packageModel.type,
-      panel_dimensions: panelDimensions,
+      panel_dimensions: getPanelDimensions(packageModel, selectedPanelId),
       package_dimensions: packageModel.dimensions,
     })
 

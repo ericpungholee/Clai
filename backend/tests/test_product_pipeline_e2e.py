@@ -64,8 +64,9 @@ def _wait_for_completion(client: TestClient, timeout: int = 1200):
 
 def _ensure_base_product(client: TestClient):
     state = client.get("/product").json()
-    if state.get("trellis_output", {}).get("model_file"):
+    if state.get("current_model_asset_url") or state.get("trellis_output", {}).get("model_file"):
         return state
+
     client.post(
         "/product/create",
         json={
@@ -73,6 +74,23 @@ def _ensure_base_product(client: TestClient):
             "image_count": 3,
         },
     )
+    _wait_for_completion(client)
+
+    state = client.get("/product").json()
+    selected_concept_id = state.get("selected_concept_id")
+    if not selected_concept_id:
+        concepts = state.get("concept_directions") or []
+        selected_concept_id = concepts[0]["concept_id"] if concepts else None
+    if not selected_concept_id:
+        raise AssertionError("No concept available after create flow")
+
+    select_resp = client.post(
+        "/product/concepts/select",
+        json={"concept_id": selected_concept_id},
+    )
+    assert select_resp.status_code == 200, select_resp.text
+
+    client.post("/product/draft/generate")
     _wait_for_completion(client)
     return client.get("/product").json()
 
@@ -146,6 +164,29 @@ def test_product_create_flow_real(api_client):
 
     status = _wait_for_completion(api_client)
     assert status["status"] == "complete"
+
+    state = api_client.get("/product").json()
+    assert state.get("design_brief")
+    assert state.get("concept_directions")
+    assert state.get("workflow_stage") == "concepts_ready"
+    assert len(state.get("concept_directions") or []) == 4
+    assert all(
+        concept.get("concept_image_url")
+        for concept in state.get("concept_directions") or []
+    )
+
+    selected_concept_id = state["concept_directions"][0]["concept_id"]
+    assert selected_concept_id
+
+    select_resp = api_client.post(
+        "/product/concepts/select",
+        json={"concept_id": selected_concept_id},
+    )
+    assert select_resp.status_code == 200, select_resp.text
+
+    draft_resp = api_client.post("/product/draft/generate")
+    assert draft_resp.status_code == 200, draft_resp.text
+    status = _wait_for_completion(api_client)
     assert status.get("model_file")
 
     state = api_client.get("/product").json()
@@ -157,12 +198,12 @@ def test_product_create_flow_real(api_client):
     print("\n✅ CREATE FLOW COMPLETE")
     print(f"⏱️  Total time: {elapsed:.1f}s ({elapsed/60:.1f} minutes)")
     print(f"📦 Model file: {model_url[:80]}..." if len(model_url) > 80 else f"📦 Model file: {model_url}")
-    print(f"🖼️  Images: {len(state['images'])} generated")
+    print(f"🖼️  Concept images generated: {len(state['concept_directions'])}")
     print("📁 Artifacts saved to: backend/tests/artifacts/")
     print("="*80 + "\n")
     
     assert state["trellis_output"]["model_file"]
-    assert len(state["images"]) == 3
+    assert len(state["version_history"]) >= 1
 
 
 def test_product_edit_flow_real(api_client):

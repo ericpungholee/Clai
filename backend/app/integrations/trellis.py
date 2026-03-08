@@ -1,15 +1,19 @@
-import fal_client
 import logging
 import os
 import time
-from typing import Optional, List
+from typing import List, Optional
+
+import fal_client
 from typing_extensions import TypedDict
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+
 class TrellisOutput(TypedDict, total=False):
-    """Output schema from Trellis model."""
+    """Output schema from the active Trellis model."""
+
     model_file: str
     color_video: str
     gaussian_ply: str
@@ -17,174 +21,177 @@ class TrellisOutput(TypedDict, total=False):
     combined_video: str
     no_background_images: List[str]
 
+
 class TrellisService:
     def __init__(self):
         self.api_key = settings.FAL_KEY
+        self.model_id = settings.TRELLIS_MODEL_ID
+        self._progress_callback = None
+
         if self.api_key:
-            # Set environment variable for fal_client library
             os.environ["FAL_KEY"] = self.api_key
-            # Log first 10 chars for debugging (never log full API keys in production!)
-            logger.info(f"fal.ai API key configured: {self.api_key[:10]}...")
+            logger.info("fal.ai API key configured: %s...", self.api_key[:10])
         else:
             logger.warning("No fal.ai API key found in settings")
-    
+
     def generate_3d_asset(
         self,
         images: List[str],
         seed: int = 1337,
-        # DEMO MODE: Maximum quality settings (slower but best results)
-        texture_size: int = 2048,       # Max resolution textures (was 1024)
-        mesh_simplify: float = 0.95,    # 95% mesh retention for maximum detail (was 0.92)
-        ss_sampling_steps: int = 20,    # High quality geometry (was 14)
-        ss_guidance_strength: float = 8.0,  # Strong geometry fidelity (was 7.5)
-        slat_sampling_steps: int = 20,  # High quality latent details (was 14)
-        slat_guidance_strength: float = 4.0,  # Enhanced texture detail (was 3.5)
-        progress_callback = None,
+        resolution: int = 1024,
+        texture_size: int = 2048,
+        decimation_target: int = 500000,
+        ss_sampling_steps: int = 12,
+        ss_guidance_strength: float = 7.5,
+        shape_slat_sampling_steps: int = 12,
+        shape_slat_guidance_strength: float = 7.5,
+        tex_slat_sampling_steps: int = 12,
+        tex_slat_guidance_strength: float = 1.0,
+        remesh: bool = True,
+        remesh_band: float = 1.0,
+        progress_callback=None,
         use_multi_image: bool = False,
-        multiimage_algo: str = "stochastic",
+        multiimage_algo: Optional[str] = None,
     ) -> TrellisOutput:
-        """
-        Generate a 3D asset from input images using Trellis via fal.ai.
-        
-        Supports single-image and multi-image workflows (set use_multi_image=True).
-        
-        🎨 DEMO MODE - Parameters optimized for MAXIMUM QUALITY:
-        - texture_size: 2048 (max resolution for crisp textures)
-        - mesh_simplify: 0.95 (95% mesh retention for maximum geometric detail)
-        - ss_sampling_steps: 20 (high quality geometry reconstruction)
-        - ss_guidance_strength: 8.0 (strong adherence to input image)
-        - slat_sampling_steps: 20 (high quality latent space sampling)
-        - slat_guidance_strength: 4.0 (enhanced texture/detail fidelity)
-        
-        ⏱️  Expected time: 4-6 minutes per model (vs ~2-3 min with standard settings)
-        📦 Output quality: Significantly sharper textures and more detailed geometry
-        """
+        """Generate a 3D asset from input images using fal.ai Trellis."""
+
         try:
-            if not images or len(images) == 0:
+            if not images:
                 raise ValueError("No images provided")
-            
+
             use_multi = use_multi_image and len(images) > 1
-            
-            logger.info("=" * 80)
-            logger.info("🎨 TRELLIS SERVICE - Submitting request to fal.ai")
-            logger.info(f"  Images provided: {len(images)}")
-            if use_multi:
-                for idx, img in enumerate(images, 1):
-                    logger.info(f"    [{idx}] len={len(img)} preview={img[:100]}...")
-            else:
-                logger.info(f"  Image URL length: {len(images[0])}")
-                logger.info(f"  Image URL preview: {images[0][:100]}...")
-            logger.info(f"  seed: {seed}")
-            logger.info(f"  texture_size: {texture_size}")
-            logger.info(f"  mesh_simplify: {mesh_simplify}")
-            logger.info(f"  ss_sampling_steps: {ss_sampling_steps}")
-            logger.info(f"  ss_guidance_strength: {ss_guidance_strength}")
-            logger.info(f"  slat_sampling_steps: {slat_sampling_steps}")
-            logger.info(f"  slat_guidance_strength: {slat_guidance_strength}")
-            logger.info("=" * 80)
-            
-            # Store callback for use in _handle_queue_update
             self._progress_callback = progress_callback
-            
-            # Track generation time
-            start_time = time.time()
-            
-            # Submit request and get result using fal_client.subscribe
-            # This handles submission, polling, and result retrieval automatically
+
+            logger.info("=" * 80)
+            logger.info("TRELLIS SERVICE - Submitting request to fal.ai")
+            logger.info("  model_id: %s", self.model_id)
+            logger.info("  image_count: %s", len(images))
+            logger.info("  seed: %s", seed)
+            logger.info("  resolution: %s", resolution)
+            logger.info("  texture_size: %s", texture_size)
+            logger.info("  decimation_target: %s", decimation_target)
+            logger.info("  ss_sampling_steps: %s", ss_sampling_steps)
+            logger.info("  ss_guidance_strength: %s", ss_guidance_strength)
+            logger.info("  shape_slat_sampling_steps: %s", shape_slat_sampling_steps)
+            logger.info("  shape_slat_guidance_strength: %s", shape_slat_guidance_strength)
+            logger.info("  tex_slat_sampling_steps: %s", tex_slat_sampling_steps)
+            logger.info("  tex_slat_guidance_strength: %s", tex_slat_guidance_strength)
+            logger.info("  remesh: %s", remesh)
+            logger.info("  remesh_band: %s", remesh_band)
+            logger.info("=" * 80)
+
             arguments = {
                 "seed": seed,
+                "resolution": resolution,
                 "texture_size": texture_size,
-                "mesh_simplify": mesh_simplify,
+                "decimation_target": decimation_target,
                 "ss_sampling_steps": ss_sampling_steps,
                 "ss_guidance_strength": ss_guidance_strength,
-                "slat_sampling_steps": slat_sampling_steps,
-                "slat_guidance_strength": slat_guidance_strength,
-                "image_url": images[0],
+                "shape_slat_sampling_steps": shape_slat_sampling_steps,
+                "shape_slat_guidance_strength": shape_slat_guidance_strength,
+                "tex_slat_sampling_steps": tex_slat_sampling_steps,
+                "tex_slat_guidance_strength": tex_slat_guidance_strength,
+                "remesh": remesh,
+                "remesh_band": remesh_band,
             }
+
             if use_multi:
                 arguments["image_urls"] = images
-                arguments["multiimage_algo"] = multiimage_algo
-            
+                if multiimage_algo:
+                    logger.info(
+                        "  multiimage_algo %s ignored by %s",
+                        multiimage_algo,
+                        self.model_id,
+                    )
+            else:
+                arguments["image_url"] = images[0]
+
+            start_time = time.time()
             result = fal_client.subscribe(
-                "fal-ai/trellis",
+                self.model_id,
                 arguments=arguments,
                 with_logs=True,
-                on_queue_update=lambda update: self._handle_queue_update(update)
+                on_queue_update=lambda update: self._handle_queue_update(update),
             )
-            
-            # Calculate generation time
             generation_time = time.time() - start_time
-            
+
             logger.info("=" * 80)
-            logger.info("✓ Request completed successfully")
-            logger.info(f"⏱️  GENERATION TIME: {generation_time:.2f} seconds ({generation_time/60:.2f} minutes)")
+            logger.info("Request completed successfully")
+            logger.info(
+                "GENERATION TIME: %.2f seconds (%.2f minutes)",
+                generation_time,
+                generation_time / 60,
+            )
             logger.info("=" * 80)
-            logger.info(f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'not a dict'}")
-            
-            # Log fal.ai timings if available
+
             if isinstance(result, dict) and "timings" in result:
-                logger.info(f"📊 Fal.ai Timings: {result['timings']}")
-            
-            logger.info(f"Full result: {result}")
-            
-            # Map fal.ai output to TrellisOutput schema
-            # fal.ai returns: {"model_mesh": {"url": "...", ...}, "timings": {...}}
-            output = {}
-            
-            if isinstance(result, dict):
-                # Check for model_mesh in the result
-                if "model_mesh" in result and result["model_mesh"]:
-                    model_mesh = result["model_mesh"]
-                    if isinstance(model_mesh, dict) and "url" in model_mesh:
-                        output["model_file"] = model_mesh["url"]
-                        logger.info(f"🎯 Model file URL: {output['model_file']}")
-                    elif isinstance(model_mesh, str):
-                        output["model_file"] = model_mesh
-                        logger.info(f"🎯 Model file URL: {output['model_file']}")
-            
-            if not output:
-                raise Exception(f"No valid output received from fal.ai. Result was: {result}")
-            
-            logger.info(f"✅ Successfully generated 3D asset in {generation_time:.2f}s: {output}")
+                logger.info("Fal.ai timings: %s", result["timings"])
+
+            output = self._map_result(result)
+            logger.info("Successfully generated 3D asset in %.2fs: %s", generation_time, output)
             return output
-            
-        except Exception as e:
-            logger.exception(f"Failed to generate 3D asset: {str(e)}")
-            raise Exception(f"Failed to generate 3D asset: {str(e)}")
-    
+
+        except Exception as exc:
+            logger.exception("Failed to generate 3D asset: %s", exc)
+            raise Exception(f"Failed to generate 3D asset: {exc}")
+
+    def _map_result(self, result) -> TrellisOutput:
+        output: TrellisOutput = {}
+
+        if not isinstance(result, dict):
+            raise Exception(f"No valid output received from fal.ai. Result was: {result}")
+
+        model_glb = result.get("model_glb")
+        if isinstance(model_glb, dict) and "url" in model_glb:
+            output["model_file"] = model_glb["url"]
+        elif isinstance(model_glb, str):
+            output["model_file"] = model_glb
+
+        # Fallback for older Trellis result shapes if the model id is overridden.
+        if "model_file" not in output:
+            legacy_model_mesh = result.get("model_mesh")
+            if isinstance(legacy_model_mesh, dict) and "url" in legacy_model_mesh:
+                output["model_file"] = legacy_model_mesh["url"]
+            elif isinstance(legacy_model_mesh, str):
+                output["model_file"] = legacy_model_mesh
+
+        if "model_file" not in output:
+            raise Exception(f"No valid output received from fal.ai. Result was: {result}")
+
+        return output
+
     def _handle_queue_update(self, update):
         """Handle queue status updates and log progress."""
+
         status_msg = None
         progress_val = None
-        
-        if hasattr(update, 'status'):
-            logger.info(f"Queue status: {update.status}")
+
+        if hasattr(update, "status"):
+            logger.info("Queue status: %s", update.status)
             status_msg = update.status
-            
-            # Map Fal.ai statuses to progress percentages
-            if update.status == 'IN_QUEUE':
+            if update.status == "IN_QUEUE":
                 progress_val = 50
-            elif update.status == 'IN_PROGRESS':
+            elif update.status == "IN_PROGRESS":
                 progress_val = 70
-                
-        if hasattr(update, 'logs') and update.logs:
+
+        if hasattr(update, "logs") and update.logs:
             for log in update.logs:
-                if hasattr(log, 'message'):
-                    logger.info(f"  Progress: {log.message}")
+                if hasattr(log, "message"):
+                    logger.info("  Progress: %s", log.message)
                     status_msg = log.message
-                elif isinstance(log, dict) and 'message' in log:
-                    logger.info(f"  Progress: {log['message']}")
-                    status_msg = log['message']
+                elif isinstance(log, dict) and "message" in log:
+                    logger.info("  Progress: %s", log["message"])
+                    status_msg = log["message"]
                 elif isinstance(log, str):
-                    logger.info(f"  Progress: {log}")
+                    logger.info("  Progress: %s", log)
                     status_msg = log
-        
-        # Call the progress callback if provided
+
         if self._progress_callback and status_msg:
             self._progress_callback(
                 status="generating_model",
                 progress=progress_val or 60,
-                message=f"Trellis: {status_msg}"
+                message=f"Trellis: {status_msg}",
             )
+
 
 trellis_service = TrellisService()

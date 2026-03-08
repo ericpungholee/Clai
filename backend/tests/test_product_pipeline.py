@@ -1,6 +1,6 @@
+import asyncio
 import sys
 from pathlib import Path
-import asyncio
 
 import pytest
 
@@ -8,7 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.models.product_state import (
+from app.models.product_state import (  # noqa: E402
+    DesignVersion,
     ProductState,
     ProductStatus,
     TrellisArtifacts,
@@ -18,37 +19,25 @@ from app.models.product_state import (
     save_product_state,
     save_product_status,
 )
-from app.services.product_pipeline import product_pipeline_service
-from app.integrations import gemini
+from app.services.product_pipeline import product_pipeline_service  # noqa: E402
 
 
 @pytest.mark.asyncio
-async def test_create_flow_persists_assets(monkeypatch):
-    """The create pipeline should persist images, trellis output, and status."""
+async def test_create_flow_builds_brief_and_concepts(monkeypatch):
     clear_product_state()
     save_product_status(ProductStatus())
 
-    sample_images = ["image-a", "image-b", "image-c"]
-    sample_trellis = {
-        "model_file": "https://cdn.local/model.glb",
-        "color_video": "https://cdn.local/color.mp4",
-        "no_background_images": ["https://cdn.local/nobg.png"],
-    }
+    generated_prompts: list[tuple[str, str]] = []
 
-    async def fake_generate_views(prompt, reference_images=None, image_count=3, thinking_level=None):
+    async def fake_generate_images(prompt, workflow, image_count=1, reference_images=None, base_description=None):
         await asyncio.sleep(0)
-        assert reference_images is None
-        assert prompt == "New speaker concept"
-        assert image_count == 3
-        return sample_images
+        del reference_images, base_description
+        generated_prompts.append((workflow, prompt))
+        assert workflow == "create"
+        assert image_count == 1
+        return [f"concept-image-{len(generated_prompts)}"]
 
-    async def fake_generate_trellis(images):
-        await asyncio.sleep(0)
-        assert images == sample_images
-        return sample_trellis
-
-    monkeypatch.setattr(gemini.gemini_image_service, "generate_product_images", fake_generate_views)
-    monkeypatch.setattr(product_pipeline_service, "_generate_trellis_model", fake_generate_trellis)
+    monkeypatch.setattr(product_pipeline_service, "_generate_product_images", fake_generate_images)
 
     await product_pipeline_service.run_create("New speaker concept", image_count=3)
 
@@ -56,52 +45,141 @@ async def test_create_flow_persists_assets(monkeypatch):
     status = get_product_status()
 
     assert state.prompt == "New speaker concept"
-    assert state.trellis_output is not None
-    assert state.trellis_output.model_file == sample_trellis["model_file"]
-    assert len(state.iterations) == 1
-    assert state.iterations[0].type == "create"
+    assert state.design_brief is not None
+    assert state.design_brief.product_name
+    assert len(state.concept_directions) == 4
+    assert all(concept.concept_image_url for concept in state.concept_directions)
+    assert state.images == [concept.concept_image_url for concept in state.concept_directions]
+    assert state.selected_concept_id is None
+    assert state.workflow_stage == "concepts_ready"
+    assert state.trellis_output is None
+    assert len(generated_prompts) == 4
     assert status.status == "complete"
-    assert status.model_file == sample_trellis["model_file"]
+    assert status.workflow_stage == "concepts_ready"
     assert not state.in_progress
 
 
 @pytest.mark.asyncio
-async def test_edit_flow_uses_previous_images(monkeypatch):
+async def test_selected_concept_draft_flow_persists_version(monkeypatch):
     clear_product_state()
-    base_state = ProductState(
-        prompt="Base bottle",
-        images=["existing-image"],
-        status="complete",
-        mode="create",
-    )
-    save_product_state(base_state)
-    save_product_status(ProductStatus(status="complete", progress=100))
+    save_product_status(ProductStatus())
 
-    updated_images = ["edit-1", "edit-2", "edit-3"]
-    trellis_data = TrellisArtifacts(model_file="https://cdn.local/new.glb").model_dump(mode="json")
+    generated_prompts: list[tuple[str, str]] = []
 
-    async def fake_generate_views(prompt, reference_images=None, image_count=3, thinking_level=None):
+    async def fake_generate_images(prompt, workflow, image_count=1, reference_images=None, base_description=None):
         await asyncio.sleep(0)
-        assert prompt == "Add metallic label"
-        assert reference_images == ["existing-image"]
-        return updated_images
+        del reference_images, base_description
+        generated_prompts.append((workflow, prompt))
+        assert workflow == "create"
+        assert image_count == 1
+        return [f"image-{len(generated_prompts)}"]
 
     async def fake_generate_trellis(images):
         await asyncio.sleep(0)
-        assert images == updated_images
-        return trellis_data
+        assert images == ["image-2"]
+        return {
+            "model_file": "https://cdn.local/model.glb",
+            "color_video": "https://cdn.local/color.mp4",
+            "no_background_images": ["https://cdn.local/nobg.png"],
+        }
 
-    monkeypatch.setattr(gemini.gemini_image_service, "generate_product_images", fake_generate_views)
+    monkeypatch.setattr(product_pipeline_service, "_generate_product_images", fake_generate_images)
     monkeypatch.setattr(product_pipeline_service, "_generate_trellis_model", fake_generate_trellis)
 
-    await product_pipeline_service.run_edit("Add metallic label")
+    await product_pipeline_service.run_create("New speaker concept", image_count=3)
+    state = get_product_state()
+    selected_concept = state.concept_directions[1]
+    product_pipeline_service.select_or_refine_concept(state, selected_concept.concept_id)
+    await product_pipeline_service.run_generate_draft()
 
     state = get_product_state()
     status = get_product_status()
 
-    assert len(state.iterations) == 1
-    assert state.iterations[0].type == "edit"
-    assert state.trellis_output.model_file == trellis_data["model_file"]
+    assert len(generated_prompts) == 4
+    assert state.reference_set is not None
+    assert len(state.reference_set.images) == 1
+    assert state.reference_set.images[0].url == "image-2"
+    assert state.trellis_output is not None
+    assert state.trellis_output.model_file == "https://cdn.local/model.glb"
+    assert len(state.version_history) == 1
+    assert state.active_version_id == state.version_history[0].version_id
+    assert state.current_model_asset_url == "https://cdn.local/model.glb"
+    assert state.workflow_stage == "editing"
     assert status.status == "complete"
-    assert status.model_file == trellis_data["model_file"]
+    assert status.workflow_stage == "editing"
+    assert status.model_file == "https://cdn.local/model.glb"
 
+
+@pytest.mark.asyncio
+async def test_edit_flow_creates_child_version(monkeypatch):
+    clear_product_state()
+
+    base_state = ProductState(
+        prompt="Base bottle",
+        latest_instruction="Base bottle",
+        status="complete",
+        mode="idle",
+        workflow_stage="draft_ready",
+        last_completed_stage="draft_ready",
+        design_brief=product_pipeline_service._infer_design_brief("Base bottle"),
+        concept_directions=product_pipeline_service._build_concept_directions(
+            product_pipeline_service._infer_design_brief("Base bottle")
+        ),
+        selected_concept_id="base-bottle-soft-radius-1",
+        images=["existing-image"],
+        trellis_output=TrellisArtifacts(model_file="https://cdn.local/base.glb"),
+        version_history=[
+            DesignVersion(
+                version_id="version_base",
+                model_asset_url="https://cdn.local/base.glb",
+                preview_images=["existing-image"],
+                summary_of_changes="Initial draft",
+            )
+        ],
+        active_version_id="version_base",
+        current_model_asset_url="https://cdn.local/base.glb",
+        named_regions=product_pipeline_service._infer_regions(
+            product_pipeline_service._infer_design_brief("Base bottle")
+        ),
+    )
+    save_product_state(base_state)
+    save_product_status(ProductStatus(status="complete", progress=100, workflow_stage="draft_ready"))
+
+    async def fake_generate_images(prompt, workflow, image_count=3, reference_images=None, base_description=None):
+        await asyncio.sleep(0)
+        assert workflow == "edit"
+        assert reference_images == ["existing-image"]
+        assert "front_face" in prompt
+        return ["edit-1", "edit-2", "edit-3"]
+
+    async def fake_generate_trellis(images):
+        await asyncio.sleep(0)
+        assert images == ["edit-1", "edit-2", "edit-3"]
+        return TrellisArtifacts(model_file="https://cdn.local/new.glb").model_dump(mode="json")
+
+    monkeypatch.setattr(product_pipeline_service, "_generate_product_images", fake_generate_images)
+    monkeypatch.setattr(product_pipeline_service, "_generate_trellis_model", fake_generate_trellis)
+
+    await product_pipeline_service.run_edit(
+        "Add metallic label",
+        target_scope="front_face",
+        edit_kind="edit_region",
+    )
+
+    state = get_product_state()
+    status = get_product_status()
+
+    assert len(state.version_history) == 2
+    assert state.active_version_id == state.version_history[-1].version_id
+    assert state.version_history[-1].parent_version_id == "version_base"
+    assert state.editor_state.selected_part_id == "front_face"
+    assert state.workflow_stage == "editing"
+    assert state.editor_state.interaction_mode == "direct_edit"
+    assert state.editor_state.handles_visible is True
+    assert state.editor_state.active_tool == "resize"
+    assert state.iterations[-1].type == "edit"
+    assert state.trellis_output is not None
+    assert state.trellis_output.model_file == "https://cdn.local/new.glb"
+    assert status.status == "complete"
+    assert status.workflow_stage == "editing"
+    assert status.model_file == "https://cdn.local/new.glb"

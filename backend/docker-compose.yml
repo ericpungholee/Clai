@@ -12,14 +12,13 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - FAL_KEY=${FAL_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GEMINI_PRO_MODEL=${GEMINI_PRO_MODEL}
-      - GEMINI_FLASH_MODEL=${GEMINI_FLASH_MODEL}
-      - GEMINI_IMAGE_SIZE=${GEMINI_IMAGE_SIZE}
-      - GEMINI_THINKING_LEVEL=${GEMINI_THINKING_LEVEL}
+      - GEMINI_PRO_MODEL=${GEMINI_PRO_MODEL:-gemini-3.1-flash-image-preview}
+      - GEMINI_FLASH_MODEL=${GEMINI_FLASH_MODEL:-gemini-3.1-flash-image-preview}
+      - GEMINI_IMAGE_SIZE=${GEMINI_IMAGE_SIZE:-1K}
+      - GEMINI_IMAGE_ASPECT_RATIO=${GEMINI_IMAGE_ASPECT_RATIO:-1:1}
+      - GEMINI_THINKING_LEVEL=${GEMINI_THINKING_LEVEL:-low}
       - SAVE_ARTIFACTS_LOCALLY=${SAVE_ARTIFACTS_LOCALLY:-false}
-      - DEMO_MOCK_MODE=${DEMO_MOCK_MODE:-false}
-      - DEMO_CREATE_DELAY=${DEMO_CREATE_DELAY:-8}
-      - DEMO_EDIT_DELAY=${DEMO_EDIT_DELAY:-6}
+      - TRELLIS_MODEL_ID=${TRELLIS_MODEL_ID:-fal-ai/trellis-2}
     depends_on:
       - redis
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload

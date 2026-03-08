@@ -101,7 +101,7 @@ export interface PanelState {
   designPattern?: string // Type of design pattern applied
   textureUrl?: string // URL to texture/design image
   color?: string
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 }
 
 // Complete package model structure

@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowRight, Upload, Boxes, X } from "lucide-react";
+import { ArrowRight, Boxes, FolderOpen, Upload, X } from "lucide-react";
 import { useLoading } from "@/providers/LoadingProvider";
-import { createProduct, getProductStatus } from "@/lib/product-api";
+import { createProject, listProjects, openProject } from "@/lib/project-api";
+import type { SavedProjectSummary } from "@/lib/project-types";
+import { createProduct } from "@/lib/product-api";
 import { Bungee } from "next/font/google";
 
 const bungee = Bungee({
@@ -14,9 +16,6 @@ const bungee = Bungee({
   subsets: ["latin"],
   variable: "--font-bungee",
 });
-
-const POLL_INTERVAL_MS = 5000;
-const MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 
 export default function Home() {
   const router = useRouter();
@@ -31,6 +30,10 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [currentProductIndex, setCurrentProductIndex] = useState(0);
   const [isAnimating, setIsAnimating] = useState(false);
+  const [projects, setProjects] = useState<SavedProjectSummary[]>([]);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectActionId, setProjectActionId] = useState<string | null>(null);
 
   const productIdeas = ["Labubu", "Lego", "ball", "hat", "mug", "chair", "pillow"];
 
@@ -61,20 +64,20 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [isLoaded, productIdeas.length]);
 
-  const pollUntilComplete = async () => {
-    const startTime = Date.now();
-    while (Date.now() - startTime < MAX_WAIT_MS) {
-      const status = await getProductStatus();
-      if (status.status === "complete") {
-        return;
-      }
-      if (status.status === "error") {
-        throw new Error(status.error || status.message || "Generation failed");
-      }
-      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  const loadProjects = useCallback(async () => {
+    try {
+      setProjectsLoading(true);
+      const response = await listProjects();
+      setProjects(response.projects ?? []);
+      setCurrentProjectId(response.current_project_id ?? null);
+    } finally {
+      setProjectsLoading(false);
     }
-    throw new Error("Generation timed out");
-  };
+  }, []);
+
+  useEffect(() => {
+    void loadProjects();
+  }, [loadProjects]);
 
   const handleStart = async () => {
     if (!prompt.trim()) return;
@@ -83,8 +86,11 @@ export default function Home() {
   	startLoading();
 
     try {
-  	  await createProduct(prompt.trim(), 1);
-  	  await pollUntilComplete();
+      await createProject({
+        prompt: prompt.trim(),
+        lastRoute: "/product",
+      });
+      await createProduct(prompt.trim(), 4);
       router.push("/product");
     } catch (error) {
       console.error("Generation failed:", error);
@@ -140,6 +146,23 @@ export default function Home() {
     setImages(prev => prev.filter((_, i) => i !== index));
   };
 
+  const handleOpenProject = useCallback(
+    async (project: SavedProjectSummary) => {
+      try {
+        setProjectActionId(project.project_id);
+        startLoading();
+        await openProject(project.project_id);
+        router.push(project.last_route || "/product");
+      } catch (error) {
+        console.error("Failed to open project:", error);
+        stopLoading();
+      } finally {
+        setProjectActionId(null);
+      }
+    },
+    [router, startLoading, stopLoading],
+  );
+
   const suggestions = [
     { text: "Create a Lego Donkey Kong Labubu" },
     { text: "Design a blue water bottle" },
@@ -162,7 +185,8 @@ export default function Home() {
   ];
 
   return (
-    <div className="relative flex flex-col items-center justify-center h-full p-4 md:p-8 max-w-4xl mx-auto w-full overflow-hidden">
+    <div className="relative min-h-full overflow-y-auto px-4 pb-12 pt-8 md:px-8">
+      <div className="mx-auto flex w-full max-w-6xl flex-col items-center">
       
       {/* Loading Overlay (managed globally via provider now, but we keep state for button disabled) */}
       
@@ -198,7 +222,7 @@ export default function Home() {
       </div>
 
       {/* Top Logo */}
-      <div className={`
+      <div className={` 
         absolute top-8 left-8 z-10
         transition-all duration-300 ease-out
         ${isLoaded ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2"}
@@ -210,7 +234,7 @@ export default function Home() {
       </div>
 
       {/* Main Content - Staggered Fade In with Scale */}
-      <div className="flex flex-col items-center w-full space-y-8 z-10">
+      <div className="relative z-10 flex w-full flex-col items-center space-y-8 pt-20">
         
         <div className={`
           space-y-2 text-center mb-4
@@ -344,6 +368,115 @@ export default function Home() {
           ))}
         </div>
 
+        <section
+          className={`
+            w-full max-w-6xl transition-all duration-500 ease-out delay-200
+            ${isLoaded ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}
+          `}
+        >
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
+                Saved Projects
+              </div>
+              <h2 className="mt-2 text-2xl font-semibold">Resume from the home page</h2>
+            </div>
+            <Button variant="outline" onClick={() => void loadProjects()} disabled={projectsLoading}>
+              Refresh
+            </Button>
+          </div>
+
+          {projectsLoading ? (
+            <div className="border-2 border-black bg-background p-8 text-sm text-muted-foreground shadow-[4px_4px_0_rgba(0,0,0,1)]">
+              Loading saved projects...
+            </div>
+          ) : projects.length ? (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {projects.map((project) => {
+                const isOpening = projectActionId === project.project_id;
+                const resumeLabel =
+                  project.last_route === "/packaging"
+                    ? "Resume Packaging"
+                    : project.last_route === "/final-view"
+                      ? "Open Final View"
+                      : "Resume Product";
+
+                return (
+                  <article
+                    key={project.project_id}
+                    className="overflow-hidden border-2 border-black bg-background shadow-[4px_4px_0_rgba(0,0,0,1)]"
+                  >
+                    <div className="aspect-[4/3] border-b-2 border-black bg-muted">
+                      {project.preview_image ? (
+                        <img
+                          src={project.preview_image}
+                          alt={project.name}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                          No preview yet
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-4 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-lg font-semibold">{project.name}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {project.selected_concept_title ?? project.prompt ?? "Untitled project"}
+                          </div>
+                        </div>
+                        {project.project_id === currentProjectId ? (
+                          <span className="rounded-full border border-black bg-yellow-200 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide">
+                            Current
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
+                        <span className="rounded-full border border-black bg-secondary px-2 py-1">
+                          {project.status_label}
+                        </span>
+                        <span className="rounded-full border border-black bg-secondary px-2 py-1">
+                          {project.workflow_stage.replace(/_/g, " ")}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1 text-xs text-muted-foreground">
+                        <div>Updated {new Date(project.updated_at).toLocaleString()}</div>
+                        <div>{project.has_packaging ? "Packaging saved" : "Product-only so far"}</div>
+                      </div>
+
+                      <Button
+                        className="w-full"
+                        disabled={isOpening}
+                        onClick={() => void handleOpenProject(project)}
+                      >
+                        {isOpening ? (
+                          <>
+                            <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                            Opening...
+                          </>
+                        ) : (
+                          <>
+                            <FolderOpen className="mr-2 h-4 w-4" />
+                            {resumeLabel}
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="border-2 border-dashed border-black bg-background p-8 text-sm text-muted-foreground shadow-[4px_4px_0_rgba(0,0,0,1)]">
+              No saved projects yet. Start with a prompt, then save from the workspace and it will appear here.
+            </div>
+          )}
+        </section>
+      </div>
       </div>
     </div>
   );

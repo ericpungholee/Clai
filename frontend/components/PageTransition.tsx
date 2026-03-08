@@ -2,15 +2,14 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { usePathname } from "next/navigation";
-import { useRef } from "react";
 import { LayoutRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
-import { useContext } from "react";
+import { useContext, useState } from "react";
 import { TransitionPathnameContext } from "@/context/TransitionPathnameContext";
 
 // This component freezes the context for the exit animation
 function FrozenRoute({ children }: { children: React.ReactNode }) {
   const context = useContext(LayoutRouterContext);
-  const frozen = useRef(context).current;
+  const [frozen] = useState(context);
 
   return (
     <LayoutRouterContext.Provider value={frozen}>
