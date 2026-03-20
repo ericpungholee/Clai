@@ -6,4 +6,11 @@ node_modules/
 out/
 build/
 dist/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+pytest-cache-files-*/
+.claude/
+.benchmarks/
+backend/data/
 backend/data/redis_fallback.json
