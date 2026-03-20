@@ -71,12 +71,15 @@ def _ensure_base_product(client: TestClient):
         "/product/create",
         json={
             "prompt": "matte black smart speaker with LED ring, clean studio lighting",
-            "image_count": 3,
+            "image_count": 1,
         },
     )
     _wait_for_completion(client)
 
     state = client.get("/product").json()
+    if state.get("current_model_asset_url") or state.get("trellis_output", {}).get("model_file"):
+        return state
+
     selected_concept_id = state.get("selected_concept_id")
     if not selected_concept_id:
         concepts = state.get("concept_directions") or []
@@ -157,7 +160,7 @@ def test_product_create_flow_real(api_client):
         "/product/create",
         json={
             "prompt": "sleek reusable water bottle with engraved logo, hero product shot",
-            "image_count": 3,
+            "image_count": 1,
         },
     )
     assert resp.status_code == 200, resp.text
@@ -168,26 +171,14 @@ def test_product_create_flow_real(api_client):
     state = api_client.get("/product").json()
     assert state.get("design_brief")
     assert state.get("concept_directions")
-    assert state.get("workflow_stage") == "concepts_ready"
-    assert len(state.get("concept_directions") or []) == 4
+    assert state.get("workflow_stage") == "editing"
+    assert len(state.get("concept_directions") or []) == 1
     assert all(
         concept.get("concept_image_url")
         for concept in state.get("concept_directions") or []
     )
-
-    selected_concept_id = state["concept_directions"][0]["concept_id"]
-    assert selected_concept_id
-
-    select_resp = api_client.post(
-        "/product/concepts/select",
-        json={"concept_id": selected_concept_id},
-    )
-    assert select_resp.status_code == 200, select_resp.text
-
-    draft_resp = api_client.post("/product/draft/generate")
-    assert draft_resp.status_code == 200, draft_resp.text
-    status = _wait_for_completion(api_client)
-    assert status.get("model_file")
+    assert state.get("selected_concept_id")
+    assert state.get("trellis_output", {}).get("model_file")
 
     state = api_client.get("/product").json()
     _persist_assets(state, "create")

@@ -204,7 +204,7 @@ class ProductState(BaseModel):
     last_completed_stage: WorkflowStage = "idle"
     in_progress: bool = False
     generation_started_at: Optional[datetime] = None
-    image_count: int = 3
+    image_count: int = 1
     images: List[str] = Field(default_factory=list)
     trellis_output: Optional[TrellisArtifacts] = None
     iterations: List[ProductIteration] = Field(default_factory=list)

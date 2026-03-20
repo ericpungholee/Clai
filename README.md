@@ -1,4 +1,4 @@
-# Vril
+# Clai
 
 AI-assisted physical product design workspace for product concepts, 3D drafts, packaging, and export.
 
@@ -8,7 +8,7 @@ AI-assisted physical product design workspace for product concepts, 3D drafts, p
 
 ## What The App Does
 
-Vril turns a rough product idea into a structured design workflow instead of a one-shot image-to-3D pipeline.
+Clai turns a rough product idea into a structured design workflow instead of a one-shot image-to-3D pipeline.
 
 Current product flow:
 

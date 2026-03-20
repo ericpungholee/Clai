@@ -11,6 +11,7 @@ import {
   Box,
   CheckCircle2,
   CylinderIcon,
+  Loader2,
   MessageSquare,
   Pencil,
   RotateCcw,
@@ -34,8 +35,6 @@ import {
   updateCurrentProjectContext,
 } from "@/lib/project-api";
 import {
-  calculatePackageSurfaceArea,
-  calculatePackageVolume,
   getShapeState,
   loadCachedPanelTextures,
   normalizePackageDimensions,
@@ -82,8 +81,6 @@ const PackagingEditor = React.memo(function PackagingEditor({
   packageModel,
   packageType,
   setActiveView,
-  surfaceArea,
-  volume,
 }: {
   activeView: ViewMode;
   dimensions: PackageDimensions;
@@ -96,8 +93,6 @@ const PackagingEditor = React.memo(function PackagingEditor({
   packageModel: PackageModel | null;
   packageType: PackageType;
   setActiveView: (view: ViewMode) => void;
-  surfaceArea: number;
-  volume: number;
 }) {
   return (
     <TabsContent
@@ -300,23 +295,6 @@ const PackagingEditor = React.memo(function PackagingEditor({
         )}
       </div>
 
-      <div className="border-2 border-black p-4 space-y-2">
-        <h3 className="text-sm font-semibold text-foreground">
-          Package Information
-        </h3>
-        <div className="text-xs space-y-1">
-          <div className="flex justify-between text-muted-foreground">
-            <span>Volume:</span>
-            <span className="font-medium text-foreground">{volume} mm3</span>
-          </div>
-          <div className="flex justify-between text-muted-foreground">
-            <span>Surface Area:</span>
-            <span className="font-medium text-foreground">
-              {surfaceArea} mm2
-            </span>
-          </div>
-        </div>
-      </div>
     </TabsContent>
   );
 });
@@ -702,23 +680,18 @@ function Packaging() {
     }
   }, [persistDimensionsNow]);
 
-  const surfaceArea = useMemo(
-    () => calculatePackageSurfaceArea(packageType, dimensions),
-    [dimensions, packageType],
-  );
-
-  const volume = useMemo(
-    () => calculatePackageVolume(packageType, dimensions),
-    [dimensions, packageType],
+  const selectedPanel = useMemo(
+    () =>
+      selectedPanelId
+        ? packageModel?.panels.find((panel) => panel.id === selectedPanelId) ?? null
+        : null,
+    [packageModel, selectedPanelId],
   );
 
   if (!isHydrated || !packageModel) {
     return (
       <div className="h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4" />
-          <p className="text-muted-foreground">Loading packaging state...</p>
-        </div>
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -727,20 +700,10 @@ function Packaging() {
     <div className="h-screen bg-background flex flex-col overflow-hidden">
       <div className="border-b-2 border-black bg-card px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
-              Packaging Workspace
-            </div>
-            <div className="mt-1 text-sm font-semibold">
-              {currentProject?.name ?? "Unsaved project"}
-            </div>
-          </div>
+          <div className="text-sm font-semibold">{currentProject?.name ?? "Packaging"}</div>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="text-xs text-muted-foreground">
-              {currentProject?.has_packaging ? "Packaging state linked to project" : "Save to add this packaging work to a project"}
-            </div>
             <Button onClick={() => void handleSaveProject()} disabled={isSavingProject || isGenerating}>
-              {isSavingProject ? "Saving..." : "Save Project"}
+              {isSavingProject ? "Saving..." : "Save"}
             </Button>
             {saveMessage ? (
               <div className="text-xs text-muted-foreground">{saveMessage}</div>
@@ -776,37 +739,25 @@ function Packaging() {
                 />
 
                 {isGenerating && packagingState && (
-                  <div className="absolute top-4 left-4 z-40 bg-black/80 text-white px-4 py-3 rounded-lg shadow-lg">
-                    <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <div>
-                        <p className="text-sm font-semibold">Generating Textures</p>
-                        {packagingState.generating_panels.length > 0 && (
-                          <p className="text-xs opacity-80">
-                            {packagingState.generating_panels.length} panel(s)
-                            remaining
-                          </p>
-                        )}
-                      </div>
-                    </div>
+                  <div className="absolute top-4 left-4 z-40 flex items-center gap-2 rounded-full border border-border bg-card/95 px-3 py-2 text-sm shadow-lg backdrop-blur-sm">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>
+                      {packagingState.generating_panels.length > 0
+                        ? `${packagingState.generating_panels.length} left`
+                        : "Generating"}
+                    </span>
                   </div>
                 )}
 
                 {showTextureNotification?.show && (
                   <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-2 duration-300">
-                    <div className="bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg flex items-center gap-3 border-2 border-green-700">
-                      <CheckCircle2 className="w-5 h-5" />
-                      <div>
-                        <p className="font-semibold">Texture Applied!</p>
-                        <p className="text-sm opacity-90">
-                          {
-                            packageModel.panels.find(
-                              (panel) => panel.id === showTextureNotification.panelId,
-                            )?.name
-                          }{" "}
-                          panel updated
-                        </p>
-                      </div>
+                    <div className="bg-green-600 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 border-2 border-green-700 text-sm">
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>
+                        {packageModel.panels.find(
+                          (panel) => panel.id === showTextureNotification.panelId,
+                        )?.name ?? "Panel"} updated
+                      </span>
                     </div>
                   </div>
                 )}
@@ -850,50 +801,11 @@ function Packaging() {
               />
 
               {packageModel.panels.length > 0 && (
-                <div className="border-2 border-black p-4 space-y-3">
-                  <h3 className="text-sm font-semibold text-foreground">
-                    Select Panel
-                  </h3>
-                  <div className="grid grid-cols-2 gap-2">
-                    {packageModel.panels.map((panel) => (
-                      <Button
-                        key={panel.id}
-                        variant={
-                          selectedPanelId === panel.id ? "default" : "outline"
-                        }
-                        className="text-xs"
-                        size="sm"
-                        onClick={() =>
-                          setSelectedPanelId(
-                            panel.id === selectedPanelId ? null : panel.id,
-                          )
-                        }
-                      >
-                        {panel.name}
-                        {panelTextures[panel.id] && (
-                          <span className="ml-1 text-[10px]">*</span>
-                        )}
-                      </Button>
-                    ))}
-                  </div>
-                  {selectedPanelId && (
-                    <div className="mt-2 p-2 border-2 border-black text-xs">
-                      <p className="font-medium">
-                        {
-                          packageModel.panels.find(
-                            (panel) => panel.id === selectedPanelId,
-                          )?.name
-                        }
-                      </p>
-                      <p className="text-muted-foreground mt-1">
-                        {
-                          packageModel.panels.find(
-                            (panel) => panel.id === selectedPanelId,
-                          )?.description
-                        }
-                      </p>
-                    </div>
-                  )}
+                <div className="border-2 border-black p-4 space-y-2 text-xs">
+                  <h3 className="text-sm font-semibold text-foreground">Target</h3>
+                  <p className="font-medium text-foreground">
+                    {selectedPanel ? selectedPanel.name : "No panel selected"}
+                  </p>
                 </div>
               )}
             </TabsContent>
@@ -907,8 +819,6 @@ function Packaging() {
               packageModel={packageModel}
               packageType={packageType}
               setActiveView={setActiveView}
-              surfaceArea={surfaceArea}
-              volume={volume}
             />
           </Tabs>
         </div>

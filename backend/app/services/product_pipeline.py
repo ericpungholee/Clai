@@ -255,7 +255,7 @@ class ProductPipelineService:
     """Stage-aware orchestration for the product workflow."""
 
     def __init__(self) -> None:
-        self._default_image_count = 4
+        self._default_image_count = 1
 
     async def run_create(self, prompt: str, image_count: Optional[int] = None) -> None:
         logger.info("[product-pipeline] Starting staged create flow")
@@ -269,16 +269,36 @@ class ProductPipelineService:
 
         try:
             await self.create_design_brief(state, prompt)
-            await self.generate_concept_directions(state)
+            concepts = await self.generate_concept_directions(state, max_concepts=1)
+            primary_concept = concepts[0] if concepts else None
+            if not primary_concept:
+                raise RuntimeError("No concept directions were generated")
+
+            state.selected_concept_id = primary_concept.concept_id
+            state.reference_set = None
+            state.images = (
+                [primary_concept.concept_image_url]
+                if primary_concept.concept_image_url
+                else []
+            )
+            state.message = f"Building initial 3D draft from {primary_concept.title}"
+            save_product_state(state)
+            self._sync_status_from_state(
+                state,
+                progress=72,
+                message=state.message,
+            )
+
+            await self.generate_3d_draft(state, note="Initial draft from prompt")
             state.mark_complete(
-                "Concept directions ready for selection",
-                workflow_stage="concepts_ready",
+                "Initial 3D draft ready for editing",
+                workflow_stage="editing",
             )
             save_product_state(state)
             self._sync_status_from_state(
                 state,
                 progress=100,
-                message="Concept directions ready",
+                message="Initial 3D draft ready",
             )
         except Exception as exc:
             self._handle_failure(state, exc)
@@ -512,6 +532,7 @@ class ProductPipelineService:
         self,
         state: ProductState,
         feedback: Optional[str] = None,
+        max_concepts: Optional[int] = None,
     ) -> List[ConceptDirection]:
         if not state.design_brief:
             raise RuntimeError("Design brief missing")
@@ -535,6 +556,8 @@ class ProductPipelineService:
         )
 
         concepts = self._build_concept_directions(state.design_brief, feedback=feedback)
+        if max_concepts is not None:
+            concepts = concepts[: max(1, max_concepts)]
         total_concepts = len(concepts)
         for index, concept in enumerate(concepts, start=1):
             concept.concept_image_url = await self._generate_concept_preview(
@@ -551,17 +574,23 @@ class ProductPipelineService:
         state.reference_set = None
         state.images = [concept.concept_image_url for concept in concepts if concept.concept_image_url]
         state.set_stage("concepts_ready")
+        concept_count_label = "one" if total_concepts == 1 else str(total_concepts)
         self._complete_operation(
             state,
             operation,
-            summary="Generated four concept directions with preview images",
+            summary=f"Generated {concept_count_label} concept direction"
+            f"{'' if total_concepts == 1 else 's'} with preview images",
             artifact_ids=[concept.concept_id for concept in concepts],
         )
         save_product_state(state)
         self._sync_status_from_state(
             state,
             progress=68,
-            message="Four concept images ready for selection",
+            message=(
+                "Initial concept preview ready"
+                if total_concepts == 1
+                else f"{total_concepts} concept images ready for selection"
+            ),
         )
         if settings.SAVE_ARTIFACTS_LOCALLY:
             self._save_gemini_images(state.images, "concepts")
@@ -909,7 +938,7 @@ class ProductPipelineService:
         edited_images = await self._generate_product_images(
             prompt=prompt,
             workflow="edit",
-            image_count=max(1, min(state.image_count or self._default_image_count, 3)),
+            image_count=1,
             reference_images=base_images,
             base_description=self._build_base_description(
                 state.design_brief,

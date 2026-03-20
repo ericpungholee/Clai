@@ -37,6 +37,7 @@ const buttonVariants = cva(
 )
 
 function Button({
+  type,
   className,
   variant,
   size,
@@ -53,6 +54,7 @@ function Button({
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
       suppressHydrationWarning
+      type={asChild ? type : (type ?? 'button')}
       {...props}
     />
   )

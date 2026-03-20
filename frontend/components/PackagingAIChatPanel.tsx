@@ -30,11 +30,7 @@ export interface PackagingAIChatPanelProps {
   onEditComplete?: never;
   onEditError?: never;
 }
-
-interface ChatHistoryItem {
-  prompt: string;
-  response: string;
-}
+type NoticeTone = "default" | "success" | "error";
 
 const MAX_REFERENCE_FILE_SIZE = 5 * 1024 * 1024;
 const VAGUE_PROMPTS = new Set([
@@ -58,7 +54,7 @@ function validatePrompt(text: string): string | null {
   }
 
   if (trimmed.length < 3) {
-    return "Prompt is too short. Please be more specific.";
+    return "Be more specific.";
   }
 
   const words = trimmed.toLowerCase().split(/\s+/);
@@ -66,7 +62,7 @@ function validatePrompt(text: string): string | null {
     VAGUE_PROMPTS.has(trimmed.toLowerCase()) ||
     (words.length === 2 && VAGUE_PROMPTS.has(words[1]))
   ) {
-    return `"${trimmed}" is too vague. Please describe the style, colors, or patterns you want. Example: "blue geometric pattern with white lines".`;
+    return "Add style or color details.";
   }
 
   return null;
@@ -82,7 +78,7 @@ export function PackagingAIChatPanel({
 }: PackagingAIChatPanelProps) {
   const [prompt, setPrompt] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
-  const [history, setHistory] = useState<ChatHistoryItem[]>([]);
+  const [notice, setNotice] = useState<{ tone: NoticeTone; text: string } | null>(null);
   const [referenceMockup, setReferenceMockup] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -96,9 +92,8 @@ export function PackagingAIChatPanel({
   const showGenerating = isGenerating || bulkGenerating || isProcessing;
   const showBulkGenerating =
     packagingState?.bulk_generation_in_progress || bulkGenerating;
-
-  const pushHistory = useCallback((entry: ChatHistoryItem) => {
-    setHistory((previous) => [...previous, entry]);
+  const setCompactNotice = useCallback((text: string, tone: NoticeTone = "default") => {
+    setNotice({ tone, text });
   }, []);
 
   useEffect(() => {
@@ -113,10 +108,7 @@ export function PackagingAIChatPanel({
       }
 
       if (file.size > MAX_REFERENCE_FILE_SIZE) {
-        pushHistory({
-          prompt: "Reference upload",
-          response: "Image too large. Please use an image under 5MB.",
-        });
+        setCompactNotice("Image too large.", "error");
         return;
       }
 
@@ -128,15 +120,11 @@ export function PackagingAIChatPanel({
         }
 
         setReferenceMockup(base64);
-        pushHistory({
-          prompt: "Reference mockup uploaded",
-          response:
-            "Reference image uploaded successfully. Your next generation will use it as a style guide.",
-        });
+        setCompactNotice("Reference ready.", "success");
       };
       reader.readAsDataURL(file);
     },
-    [pushHistory],
+    [setCompactNotice],
   );
 
   const handleGenerateAll = useCallback(async () => {
@@ -148,18 +136,12 @@ export function PackagingAIChatPanel({
     const nextValidationError = validatePrompt(trimmedPrompt);
     if (nextValidationError) {
       setValidationError(nextValidationError);
-      pushHistory({
-        prompt: trimmedPrompt,
-        response: nextValidationError,
-      });
+      setCompactNotice(nextValidationError, "error");
       return;
     }
 
     if (!packageModel) {
-      pushHistory({
-        prompt: trimmedPrompt,
-        response: "Package model not available.",
-      });
+      setCompactNotice("Package unavailable.", "error");
       setPrompt("");
       return;
     }
@@ -181,17 +163,11 @@ export function PackagingAIChatPanel({
       });
 
       if (!success) {
-        pushHistory({
-          prompt: trimmedPrompt,
-          response: error || "Failed to generate textures. Please try again.",
-        });
+        setCompactNotice(error || "Generation failed.", "error");
         return;
       }
 
-      pushHistory({
-        prompt: trimmedPrompt,
-        response: `Successfully generated textures for all ${panelIds.length} panels.`,
-      });
+      setCompactNotice("All panels updated.", "success");
 
       await Promise.all(
         panelIds.map(async (panelId) => {
@@ -214,10 +190,7 @@ export function PackagingAIChatPanel({
           ? generationError.message
           : "An error occurred";
 
-      pushHistory({
-        prompt: trimmedPrompt,
-        response: `Error: ${message}`,
-      });
+      setCompactNotice(message, "error");
     } finally {
       setPrompt("");
       setIsProcessing(false);
@@ -229,8 +202,8 @@ export function PackagingAIChatPanel({
     onTextureGenerated,
     packageModel,
     prompt,
-    pushHistory,
     referenceMockup,
+    setCompactNotice,
   ]);
 
   const handleSubmit = useCallback(async () => {
@@ -242,27 +215,18 @@ export function PackagingAIChatPanel({
     const nextValidationError = validatePrompt(trimmedPrompt);
     if (nextValidationError) {
       setValidationError(nextValidationError);
-      pushHistory({
-        prompt: trimmedPrompt,
-        response: nextValidationError,
-      });
+      setCompactNotice(nextValidationError, "error");
       return;
     }
 
     if (!selectedPanelId) {
-      pushHistory({
-        prompt: trimmedPrompt,
-        response: "Please select a panel first to apply changes.",
-      });
+      setCompactNotice("Select a panel first.", "error");
       setPrompt("");
       return;
     }
 
     if (!packageModel) {
-      pushHistory({
-        prompt: trimmedPrompt,
-        response: "Package model not available.",
-      });
+      setCompactNotice("Package unavailable.", "error");
       setPrompt("");
       return;
     }
@@ -271,10 +235,7 @@ export function PackagingAIChatPanel({
       (candidate) => candidate.id === selectedPanelId,
     );
     if (!panel) {
-      pushHistory({
-        prompt: trimmedPrompt,
-        response: "Selected panel could not be found.",
-      });
+      setCompactNotice("Panel not found.", "error");
       setPrompt("");
       return;
     }
@@ -292,19 +253,11 @@ export function PackagingAIChatPanel({
       });
 
       if (!texture?.texture_url) {
-        pushHistory({
-          prompt: trimmedPrompt,
-          response:
-            error ||
-            "Texture generation completed but no image was returned.",
-        });
+        setCompactNotice(error || "No image returned.", "error");
         return;
       }
 
-      pushHistory({
-        prompt: trimmedPrompt,
-        response: `Successfully applied "${trimmedPrompt}" to the ${panel.name} panel.`,
-      });
+      setCompactNotice(`${panel.name} updated.`, "success");
       onTextureGenerated?.(selectedPanelId, texture.texture_url);
     } catch (generationError) {
       const message =
@@ -312,10 +265,7 @@ export function PackagingAIChatPanel({
           ? generationError.message
           : "An error occurred";
 
-      pushHistory({
-        prompt: trimmedPrompt,
-        response: `Error: ${message}`,
-      });
+      setCompactNotice(message, "error");
     } finally {
       setPrompt("");
       setIsProcessing(false);
@@ -326,9 +276,9 @@ export function PackagingAIChatPanel({
     onTextureGenerated,
     packageModel,
     prompt,
-    pushHistory,
     referenceMockup,
     selectedPanelId,
+    setCompactNotice,
   ]);
 
   return (
@@ -372,7 +322,7 @@ export function PackagingAIChatPanel({
 
       {referenceMockup && (
         <div className="flex items-center justify-between text-xs p-2 bg-green-50 border-2 border-green-600 rounded">
-          <span className="font-medium text-green-700">Reference image loaded</span>
+          <span className="font-medium text-green-700">Reference ready</span>
           <button
             onClick={() => setReferenceMockup(null)}
             className="font-semibold text-red-600 hover:underline"
@@ -436,45 +386,36 @@ export function PackagingAIChatPanel({
       </div>
 
       {(isProcessing || showBulkGenerating) && (
-        <div className="text-xs p-2.5 bg-muted rounded border-2 border-black space-y-1">
+        <div className="text-xs p-2.5 bg-muted rounded border-2 border-black">
           {showBulkGenerating ? (
-            <>
-              <div className="flex items-center gap-2">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <p className="font-semibold">Generating panels in parallel</p>
-              </div>
-              {packagingState?.generating_panels?.length ? (
-                <p className="text-muted-foreground">
-                  {packagingState.generating_panels.length} panel(s) remaining
-                </p>
-              ) : null}
-              <p className="text-muted-foreground">This may take 1-3 minutes</p>
-            </>
+            <div className="flex items-center gap-2">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <p className="font-semibold">
+                {packagingState?.generating_panels?.length
+                  ? `${packagingState.generating_panels.length} left`
+                  : "Generating"}
+              </p>
+            </div>
           ) : (
-            <p className="text-muted-foreground">Generating (10-30 seconds)</p>
+            <div className="flex items-center gap-2">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <p className="font-semibold">Generating</p>
+            </div>
           )}
         </div>
       )}
 
-      {history.length > 0 && (
-        <div className="space-y-2 pt-2 border-t-2 border-black">
-          <div className="text-xs font-semibold text-muted-foreground">HISTORY</div>
-          <div className="space-y-2 max-h-[200px] overflow-y-auto">
-            {history
-              .slice()
-              .reverse()
-              .map((item, index) => (
-                <div
-                  key={`${item.prompt}-${index}`}
-                  className="text-xs p-2.5 bg-muted/50 rounded border-2 border-black"
-                >
-                  <p className="font-semibold mb-1.5">{item.prompt}</p>
-                  <p className="text-muted-foreground text-[11px] leading-relaxed">
-                    {item.response}
-                  </p>
-                </div>
-              ))}
-          </div>
+      {notice && (
+        <div
+          className={`text-xs p-2.5 rounded border-2 ${
+            notice.tone === "error"
+              ? "border-red-500 bg-red-50 text-red-700"
+              : notice.tone === "success"
+                ? "border-green-600 bg-green-50 text-green-700"
+                : "border-black bg-muted text-foreground"
+          }`}
+        >
+          {notice.text}
         </div>
       )}
     </div>

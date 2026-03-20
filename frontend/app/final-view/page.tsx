@@ -148,6 +148,10 @@ export default function FinalView() {
           );
           setProductModelUrl(cachedUrl);
         }
+      } catch (error) {
+        console.error("Failed to load product export view:", error);
+        setProductState(null);
+        setProductModelUrl("");
       } finally {
         setProductLoading(false);
       }
@@ -170,6 +174,10 @@ export default function FinalView() {
             resolved.shapeState.panel_textures,
           ),
         );
+      } catch (error) {
+        console.error("Failed to load packaging export view:", error);
+        setPackageModel(null);
+        setPanelTextures({});
       } finally {
         setPackagingLoading(false);
       }

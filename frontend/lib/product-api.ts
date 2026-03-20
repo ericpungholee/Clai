@@ -39,7 +39,7 @@ function normalizeEditInput(input: string | ProductEditInput): Required<ProductE
 
 export async function createProduct(
   prompt: string,
-  imageCount: number = 4,
+  imageCount: number = 1,
 ): Promise<ProductStatus> {
   try {
     return await fetchJson<ProductStatus>(API_ENDPOINTS.product.create, {
