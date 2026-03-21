@@ -559,15 +559,57 @@ class ProductPipelineService:
         if max_concepts is not None:
             concepts = concepts[: max(1, max_concepts)]
         total_concepts = len(concepts)
-        for index, concept in enumerate(concepts, start=1):
-            concept.concept_image_url = await self._generate_concept_preview(
-                state=state,
-                brief=state.design_brief,
-                concept=concept,
-                operation=operation,
-                index=index,
-                total=total_concepts,
+        self._sync_status_from_state(
+            state,
+            progress=42,
+            message=(
+                "Rendering initial concept preview"
+                if total_concepts == 1
+                else f"Rendering {total_concepts} concept previews in parallel"
+            ),
+            operation=operation,
+        )
+
+        async def render_concept_preview(
+            index: int,
+            concept: ConceptDirection,
+        ) -> tuple[int, str]:
+            images = await self._generate_product_images(
+                prompt=self._build_concept_image_prompt(state.design_brief, concept),
+                workflow="create",
+                image_count=1,
+                base_description=self._build_base_description(state.design_brief, concept),
             )
+            if not images:
+                raise RuntimeError(f"Concept image generation returned no image for '{concept.title}'")
+            return index, images[0]
+
+        preview_tasks = [
+            asyncio.create_task(render_concept_preview(index, concept))
+            for index, concept in enumerate(concepts, start=1)
+        ]
+
+        completed_previews = 0
+        try:
+            for completed_task in asyncio.as_completed(preview_tasks):
+                index, image_url = await completed_task
+                concepts[index - 1].concept_image_url = image_url
+                completed_previews += 1
+                progress = 42 + int(completed_previews * (22 / max(total_concepts, 1)))
+                self._sync_status_from_state(
+                    state,
+                    progress=progress,
+                    message=(
+                        "Initial concept preview ready"
+                        if total_concepts == 1
+                        else f"Rendered {completed_previews} of {total_concepts} concept previews"
+                    ),
+                    operation=operation,
+                )
+        except Exception:
+            for preview_task in preview_tasks:
+                preview_task.cancel()
+            raise
 
         state.concept_directions = concepts
         state.selected_concept_id = None
@@ -729,38 +771,83 @@ class ProductPipelineService:
         )
 
         references: List[ReferenceImage] = []
-        hero_reference: Optional[str] = None
         total_roles = len(_REFERENCE_ROLE_ORDER)
+        role_order = {role: index for index, role in enumerate(_REFERENCE_ROLE_ORDER)}
+        base_description = self._build_base_description(brief, concept)
 
-        for index, role in enumerate(_REFERENCE_ROLE_ORDER, start=1):
-            progress = 12 + int((index - 1) * (55 / total_roles))
+        self._sync_status_from_state(
+            state,
+            progress=12,
+            message="Generating hero reference",
+            operation=operation,
+        )
+        hero_prompt = self._build_reference_prompt(brief, concept, "hero", notes=notes)
+        hero_images = await self._generate_product_images(
+            prompt=hero_prompt,
+            workflow="create",
+            image_count=1,
+            base_description=base_description,
+        )
+        if not hero_images:
+            raise RuntimeError("Reference generation returned no image for role 'hero'")
+
+        hero_reference = ReferenceImage(
+            role="hero",
+            url=hero_images[0],
+            prompt=hero_prompt,
+        )
+        references.append(hero_reference)
+
+        remaining_roles = [role for role in _REFERENCE_ROLE_ORDER if role != "hero"]
+        completed_roles = 1
+        if remaining_roles:
             self._sync_status_from_state(
                 state,
-                progress=progress,
-                message=f"Generating {role.replace('_', ' ')} reference",
+                progress=12 + int(completed_roles * (55 / total_roles)),
+                message=f"Generating {len(remaining_roles)} supporting references in parallel",
                 operation=operation,
             )
-            prompt = self._build_reference_prompt(brief, concept, role, notes=notes)
-            workflow = "create" if role == "hero" else "edit"
-            reference_images = [hero_reference] if hero_reference and role != "hero" else None
-            images = await self._generate_product_images(
-                prompt=prompt,
-                workflow=workflow,
-                image_count=1,
-                reference_images=reference_images,
-                base_description=self._build_base_description(brief, concept),
-            )
-            if not images:
-                raise RuntimeError(f"Reference generation returned no image for role '{role}'")
 
-            reference = ReferenceImage(
-                role=role,
-                url=images[0],
-                prompt=prompt,
-            )
-            references.append(reference)
-            if role == "hero":
-                hero_reference = reference.url
+            async def render_reference(role: ReferenceRole) -> ReferenceImage:
+                prompt = self._build_reference_prompt(brief, concept, role, notes=notes)
+                images = await self._generate_product_images(
+                    prompt=prompt,
+                    workflow="edit",
+                    image_count=1,
+                    reference_images=[hero_reference.url],
+                    base_description=base_description,
+                )
+                if not images:
+                    raise RuntimeError(f"Reference generation returned no image for role '{role}'")
+                return ReferenceImage(
+                    role=role,
+                    url=images[0],
+                    prompt=prompt,
+                )
+
+            reference_tasks = [
+                asyncio.create_task(render_reference(role))
+                for role in remaining_roles
+            ]
+
+            try:
+                for completed_task in asyncio.as_completed(reference_tasks):
+                    reference = await completed_task
+                    references.append(reference)
+                    completed_roles += 1
+                    progress = 12 + int(completed_roles * (55 / total_roles))
+                    self._sync_status_from_state(
+                        state,
+                        progress=progress,
+                        message=f"Generated {completed_roles} of {total_roles} references",
+                        operation=operation,
+                    )
+            except Exception:
+                for reference_task in reference_tasks:
+                    reference_task.cancel()
+                raise
+
+        references.sort(key=lambda reference: role_order[reference.role])
 
         reference_set = ReferenceSet(
             reference_set_id=_new_id("refs"),

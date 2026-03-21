@@ -12,5 +12,8 @@ __pycache__/
 pytest-cache-files-*/
 .claude/
 .benchmarks/
+measurements/
+backend/perf/
+backend/tests_local/
 backend/data/
 backend/data/redis_fallback.json

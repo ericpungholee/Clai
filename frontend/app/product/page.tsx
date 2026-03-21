@@ -6,7 +6,7 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import { AIChatPanel } from "@/components/AIChatPanel";
 import ModelViewer, { type ModelViewerRef } from "@/components/ModelViewer";
 import { Button } from "@/components/ui/button";
-import { getCachedModelUrl } from "@/lib/model-cache";
+import { getExistingCachedModelUrl, primeCachedModel } from "@/lib/model-cache";
 import {
   getCurrentProject,
   saveCurrentProject,
@@ -23,7 +23,7 @@ import type { ProductState, ProductStatus } from "@/lib/product-types";
 import { useLoading } from "@/providers/LoadingProvider";
 
 type ProductWorkspaceStage = "empty" | "loading" | "editor" | "error";
-const PRODUCT_POLL_INTERVAL_MS = 1500;
+const PRODUCT_POLL_INTERVAL_MS = 500;
 
 function hasProductModel(state: ProductState | null): boolean {
   return Boolean(
@@ -102,11 +102,17 @@ export default function ProductPage() {
   const loadModel = useCallback(
     async (assetKey: string, remoteModelUrl: string) => {
       try {
-        const cachedUrl = await getCachedModelUrl(assetKey, remoteModelUrl);
-        applyModelUrl(cachedUrl, assetKey);
+        const cachedUrl = await getExistingCachedModelUrl(assetKey, remoteModelUrl);
+        if (cachedUrl) {
+          applyModelUrl(cachedUrl, assetKey);
+          return;
+        }
       } catch {
-        applyModelUrl(remoteModelUrl, assetKey);
+        // Fall back to the remote asset immediately below.
       }
+
+      applyModelUrl(remoteModelUrl, assetKey);
+      void primeCachedModel(assetKey, remoteModelUrl).catch(() => {});
     },
     [applyModelUrl],
   );
@@ -139,13 +145,13 @@ export default function ProductPage() {
         return;
       }
 
-      if (latestAssetKeyRef.current === assetKey && currentModelUrl) {
+      if (latestAssetKeyRef.current === assetKey) {
         return;
       }
 
       await loadModel(assetKey, remoteModelUrl);
     },
-    [currentModelUrl, loadModel],
+    [loadModel],
   );
 
   useEffect(() => {
@@ -171,14 +177,58 @@ export default function ProductPage() {
       return;
     }
 
-    const intervalId = setInterval(() => {
-      void hydrateWorkspace({ includeProject: false }).catch((error) => {
-        console.error("Failed to refresh product workspace:", error);
-      });
-    }, PRODUCT_POLL_INTERVAL_MS);
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
-    return () => clearInterval(intervalId);
-  }, [hydrateWorkspace, productState?.in_progress]);
+    const poll = async () => {
+      try {
+        const status = await getProductStatus();
+        if (cancelled) {
+          return;
+        }
+
+        setProductStatus(status);
+
+        const currentAssetKey =
+          latestAssetKeyRef.current ??
+          productState.active_version_id ??
+          productState.iterations.at(-1)?.id ??
+          productState.current_model_asset_url ??
+          productState.editor_state.current_model_url ??
+          productState.trellis_output?.model_file ??
+          null;
+        const statusAssetKey = status.active_version_id ?? status.model_file ?? null;
+        const needsFullRefresh =
+          status.status === "complete" ||
+          status.status === "error" ||
+          (Boolean(statusAssetKey) && statusAssetKey !== currentAssetKey);
+
+        if (needsFullRefresh) {
+          await hydrateWorkspace({ includeProject: false });
+          return;
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to refresh product status:", error);
+        }
+      }
+
+      if (!cancelled) {
+        timeoutId = setTimeout(() => {
+          void poll();
+        }, PRODUCT_POLL_INTERVAL_MS);
+      }
+    };
+
+    void poll();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [hydrateWorkspace, productState]);
 
   useEffect(() => {
     return () => {

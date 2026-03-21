@@ -8,6 +8,7 @@ const CACHE_NAME = "product-models";
 
 // In-memory cache of iteration ID -> blob URL to avoid creating duplicates
 const blobUrlCache = new Map<string, string>();
+const inFlightPrimeRequests = new Map<string, Promise<void>>();
 
 async function getModelCacheEntry(iterationId: string, remoteUrl: string) {
   const [iterationHash, urlHash] = await Promise.all([
@@ -24,8 +25,21 @@ async function getModelCacheEntry(iterationId: string, remoteUrl: string) {
 }
 
 export async function getCachedModelUrl(iterationId: string, remoteUrl: string) {
+  const cachedUrl = await getExistingCachedModelUrl(iterationId, remoteUrl);
+  if (cachedUrl) {
+    return cachedUrl;
+  }
+
+  await primeCachedModel(iterationId, remoteUrl);
+  return (await getExistingCachedModelUrl(iterationId, remoteUrl)) ?? remoteUrl;
+}
+
+export async function getExistingCachedModelUrl(
+  iterationId: string,
+  remoteUrl: string,
+) {
   if (typeof window === "undefined" || !("caches" in window)) {
-    return remoteUrl;
+    return null;
   }
 
   const { cacheId, requestUrl } = await getModelCacheEntry(iterationId, remoteUrl);
@@ -45,16 +59,45 @@ export async function getCachedModelUrl(iterationId: string, remoteUrl: string) 
     return blobUrl;
   }
 
-  const response = await fetch(remoteUrl, { credentials: "omit" });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch model: ${response.status}`);
+  return null;
+}
+
+export async function primeCachedModel(iterationId: string, remoteUrl: string) {
+  if (typeof window === "undefined" || !("caches" in window)) {
+    return;
   }
 
-  await cache.put(requestUrl, response.clone());
-  const blob = await response.blob();
-  const blobUrl = URL.createObjectURL(blob);
-  blobUrlCache.set(cacheId, blobUrl);
-  return blobUrl;
+  const { cacheId, requestUrl } = await getModelCacheEntry(iterationId, remoteUrl);
+  if (blobUrlCache.has(cacheId)) {
+    return;
+  }
+
+  const cache = await caches.open(CACHE_NAME);
+  if (await cache.match(requestUrl)) {
+    return;
+  }
+
+  const inFlight = inFlightPrimeRequests.get(cacheId);
+  if (inFlight) {
+    await inFlight;
+    return;
+  }
+
+  const primeRequest = (async () => {
+    const response = await fetch(remoteUrl, { credentials: "omit" });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch model: ${response.status}`);
+    }
+    await cache.put(requestUrl, response.clone());
+  })();
+
+  inFlightPrimeRequests.set(cacheId, primeRequest);
+
+  try {
+    await primeRequest;
+  } finally {
+    inFlightPrimeRequests.delete(cacheId);
+  }
 }
 
 export async function clearCachedModel(iterationId: string) {
