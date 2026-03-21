@@ -1,7 +1,7 @@
 import logging
 import os
 import time
-from typing import List, Optional
+from typing import Dict, List, Literal, Optional
 
 import fal_client
 from typing_extensions import TypedDict
@@ -9,6 +9,67 @@ from typing_extensions import TypedDict
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+TrellisQuality = Literal["fast", "balanced", "balanced_plus", "high_quality"]
+
+TRELLIS_PRESETS: Dict[TrellisQuality, Dict[str, object]] = {
+    "fast": {
+        "resolution": 512,
+        "texture_size": 1024,
+        "decimation_target": 250000,
+        "ss_sampling_steps": 8,
+        "ss_guidance_strength": 7.5,
+        "shape_slat_sampling_steps": 8,
+        "shape_slat_guidance_strength": 7.5,
+        "tex_slat_sampling_steps": 8,
+        "tex_slat_guidance_strength": 1.0,
+        "remesh": True,
+        "remesh_band": 1.0,
+    },
+    "balanced": {
+        "resolution": 1024,
+        "texture_size": 2048,
+        "decimation_target": 500000,
+        "ss_sampling_steps": 12,
+        "ss_guidance_strength": 7.5,
+        "shape_slat_sampling_steps": 12,
+        "shape_slat_guidance_strength": 7.5,
+        "tex_slat_sampling_steps": 12,
+        "tex_slat_guidance_strength": 1.0,
+        "remesh": True,
+        "remesh_band": 1.0,
+    },
+    "balanced_plus": {
+        "resolution": 1024,
+        "texture_size": 2048,
+        "decimation_target": 550000,
+        "ss_sampling_steps": 12,
+        "ss_guidance_strength": 8.0,
+        "shape_slat_sampling_steps": 12,
+        "shape_slat_guidance_strength": 8.0,
+        "tex_slat_sampling_steps": 12,
+        "tex_slat_guidance_strength": 1.0,
+        "remesh": True,
+        "remesh_band": 1.0,
+    },
+    "high_quality": {
+        "resolution": 1536,
+        "texture_size": 4096,
+        "decimation_target": 750000,
+        "ss_sampling_steps": 20,
+        "ss_guidance_strength": 8.0,
+        "shape_slat_sampling_steps": 20,
+        "shape_slat_guidance_strength": 8.0,
+        "tex_slat_sampling_steps": 16,
+        "tex_slat_guidance_strength": 1.0,
+        "remesh": True,
+        "remesh_band": 1.0,
+    },
+}
+
+
+def resolve_trellis_preset(quality: TrellisQuality) -> Dict[str, object]:
+    return TRELLIS_PRESETS[quality].copy()
 
 
 class TrellisOutput(TypedDict, total=False):

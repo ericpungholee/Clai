@@ -15,6 +15,7 @@ from app.models.packaging_state import (  # noqa: E402
     save_packaging_state,
 )
 from app.models.product_state import (  # noqa: E402
+    DesignVersion,
     ProductEditorState,
     ProductState,
     ProductStatus,
@@ -220,3 +221,53 @@ def test_open_project_restores_saved_workspace_state():
         "depth": 90.0,
     }
     assert "front" in current_packaging_state.box_state.panel_textures
+
+
+def test_project_list_prefers_inline_preview_images_for_cards():
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/projects",
+        json={
+            "prompt": "speaker concept",
+            "last_route": "/product",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    product_state = ProductState(
+        prompt="speaker concept",
+        status="complete",
+        workflow_stage="editing",
+        last_completed_stage="editing",
+        current_model_asset_url="https://cdn.local/speaker.glb",
+        images=["data:image/png;base64,inline-preview"],
+        trellis_output=TrellisArtifacts(
+            model_file="https://cdn.local/speaker.glb",
+            no_background_images=["https://cdn.local/expiring-preview.png"],
+        ),
+        version_history=[
+            DesignVersion(
+                version_id="version_1",
+                model_asset_url="https://cdn.local/speaker.glb",
+                preview_images=["https://cdn.local/version-preview.png"],
+                summary_of_changes="Initial draft",
+            )
+        ],
+        active_version_id="version_1",
+    )
+    save_product_state(product_state)
+    save_product_status(
+        ProductStatus(
+            status="complete",
+            progress=100,
+            workflow_stage="editing",
+            model_file="https://cdn.local/speaker.glb",
+        )
+    )
+
+    list_response = client.get("/projects")
+    assert list_response.status_code == 200, list_response.text
+    payload = list_response.json()
+
+    assert payload["projects"][0]["preview_image"] == "data:image/png;base64,inline-preview"

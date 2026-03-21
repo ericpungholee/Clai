@@ -162,6 +162,13 @@ export async function getProductStatus(): Promise<ProductStatus> {
   return fetchJson<ProductStatus>(API_ENDPOINTS.product.status);
 }
 
+export function getProductViewerModelUrl(state: Pick<ProductState, "active_version_id">): string {
+  if (state.active_version_id) {
+    return API_ENDPOINTS.product.versionModel(state.active_version_id);
+  }
+  return API_ENDPOINTS.product.currentModel;
+}
+
 export async function rewindProduct(
   iterationIndex: number,
 ): Promise<{

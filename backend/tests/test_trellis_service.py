@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.integrations.trellis import TrellisService  # noqa: E402
+from app.integrations.trellis import TrellisService, resolve_trellis_preset  # noqa: E402
 
 
 def test_generate_3d_asset_uses_valid_fast_defaults(monkeypatch):
@@ -27,3 +27,10 @@ def test_generate_3d_asset_uses_valid_fast_defaults(monkeypatch):
     assert captured["arguments"]["resolution"] == 512
     assert captured["arguments"]["texture_size"] == 1024
     assert captured["arguments"]["image_url"] == "data:image/png;base64,abc"
+
+
+def test_balanced_plus_preset_uses_supported_texture_size():
+    preset = resolve_trellis_preset("balanced_plus")
+
+    assert preset["texture_size"] in {1024, 2048, 4096}
+    assert preset["texture_size"] == 2048

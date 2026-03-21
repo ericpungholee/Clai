@@ -1,6 +1,7 @@
 import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -207,3 +208,145 @@ async def test_edit_flow_creates_child_version(monkeypatch):
     assert status.status == "complete"
     assert status.workflow_stage == "editing"
     assert status.model_file == "https://cdn.local/new.glb"
+
+
+@pytest.mark.asyncio
+async def test_trellis_progress_does_not_regress_after_preview_ready(monkeypatch):
+    clear_product_state()
+    save_product_status(ProductStatus(status="generating_model", progress=72, workflow_stage="concepts_ready"))
+
+    state = get_product_state()
+    state.in_progress = True
+    state.workflow_stage = "concepts_ready"
+    save_product_state(state)
+
+    def fake_generate_3d_asset(*, images, progress_callback, use_multi_image, multiimage_algo, **kwargs):
+        del images, use_multi_image, multiimage_algo
+        assert kwargs["resolution"] == 1024
+        assert kwargs["texture_size"] == 2048
+        progress_callback("generating_model", 50, "Queued in Trellis")
+        return {"model_file": "https://cdn.local/model.glb"}
+
+    monkeypatch.setattr(
+        "app.services.product_pipeline.TRELLIS_AVAILABLE",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.services.product_pipeline.trellis_service",
+        SimpleNamespace(generate_3d_asset=fake_generate_3d_asset),
+    )
+
+    result = await product_pipeline_service._generate_trellis_model(["concept-image-1"])
+    status = get_product_status()
+
+    assert result["model_file"] == "https://cdn.local/model.glb"
+    assert status.progress == 72
+    assert status.message == "Generating 3D model"
+
+
+@pytest.mark.asyncio
+async def test_product_pipeline_uses_balanced_plus_trellis_preset(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_generate_3d_asset(*, images, progress_callback, use_multi_image, multiimage_algo, **kwargs):
+        del progress_callback
+        captured["images"] = images
+        captured["use_multi_image"] = use_multi_image
+        captured["multiimage_algo"] = multiimage_algo
+        captured.update(kwargs)
+        return {"model_file": "https://cdn.local/model.glb"}
+
+    monkeypatch.setattr(
+        "app.services.product_pipeline.TRELLIS_AVAILABLE",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.services.product_pipeline.trellis_service",
+        SimpleNamespace(generate_3d_asset=fake_generate_3d_asset),
+    )
+
+    result = await product_pipeline_service._generate_trellis_model(["concept-image-1"])
+
+    assert result["model_file"] == "https://cdn.local/model.glb"
+    assert captured["images"] == ["concept-image-1"]
+    assert captured["resolution"] == 1024
+    assert captured["texture_size"] == 2048
+    assert captured["decimation_target"] == 550000
+    assert captured["ss_sampling_steps"] == 12
+    assert captured["shape_slat_sampling_steps"] == 12
+    assert captured["tex_slat_sampling_steps"] == 12
+
+
+@pytest.mark.asyncio
+async def test_generate_concept_directions_runs_sequentially(monkeypatch):
+    clear_product_state()
+    save_product_status(ProductStatus())
+
+    state = get_product_state()
+    state.prompt = "Portable speaker"
+    state.design_brief = product_pipeline_service._infer_design_brief("Portable speaker")
+    save_product_state(state)
+
+    active_calls = 0
+    max_active_calls = 0
+
+    async def fake_generate_images(prompt, workflow, image_count=1, reference_images=None, base_description=None):
+        nonlocal active_calls, max_active_calls
+        del prompt, workflow, image_count, reference_images, base_description
+        active_calls += 1
+        max_active_calls = max(max_active_calls, active_calls)
+        await asyncio.sleep(0)
+        active_calls -= 1
+        return [f"concept-image-{max_active_calls}-{active_calls}"]
+
+    monkeypatch.setattr(product_pipeline_service, "_generate_product_images", fake_generate_images)
+
+    concepts = await product_pipeline_service.generate_concept_directions(state)
+
+    assert len(concepts) == 4
+    assert max_active_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_reference_set_runs_sequentially(monkeypatch):
+    clear_product_state()
+    save_product_status(ProductStatus())
+
+    brief = product_pipeline_service._infer_design_brief("Portable speaker")
+    concepts = product_pipeline_service._build_concept_directions(brief)
+    selected_concept = concepts[0]
+    selected_concept.concept_image_url = "concept-image-1"
+
+    state = ProductState(
+        prompt="Portable speaker",
+        design_brief=brief,
+        concept_directions=[selected_concept],
+        selected_concept_id=selected_concept.concept_id,
+    )
+    save_product_state(state)
+
+    active_calls = 0
+    max_active_calls = 0
+    call_index = 0
+
+    async def fake_generate_images(prompt, workflow, image_count=1, reference_images=None, base_description=None):
+        nonlocal active_calls, max_active_calls, call_index
+        del prompt, image_count, base_description
+        active_calls += 1
+        max_active_calls = max(max_active_calls, active_calls)
+        await asyncio.sleep(0)
+        active_calls -= 1
+        call_index += 1
+        if workflow == "create":
+            assert reference_images is None
+        else:
+            assert reference_images == ["reference-image-1"]
+        return [f"reference-image-{call_index}"]
+
+    monkeypatch.setattr(product_pipeline_service, "_generate_product_images", fake_generate_images)
+
+    reference_set = await product_pipeline_service.generate_reference_set(state)
+
+    assert len(reference_set.images) == 5
+    assert reference_set.images[0].url == "reference-image-1"
+    assert max_active_calls == 1

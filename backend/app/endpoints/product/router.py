@@ -19,6 +19,7 @@ from app.models.product_state import (
     save_product_status,
 )
 from app.services.file_export import export_product_formats, get_export_file_path
+from app.services.product_model_store import get_cached_product_model_path
 from app.services.product_pipeline import product_pipeline_service
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,22 @@ def _preview_image(state: ProductState) -> Optional[str]:
     return None
 
 
+def _resolve_model_source_url(state: ProductState, version_id: Optional[str] = None) -> Optional[str]:
+    if version_id:
+        version = next(
+            (item for item in state.version_history if item.version_id == version_id),
+            None,
+        )
+        if version and version.model_asset_url:
+            return version.model_asset_url
+        return None
+
+    active_version = state.get_active_version()
+    if active_version and active_version.model_asset_url:
+        return active_version.model_asset_url
+    return _current_model_url(state)
+
+
 def _save_status_from_state(
     state: ProductState,
     *,
@@ -174,7 +191,7 @@ async def start_create(request: ProductCreateRequest):
     state.latest_instruction = request.prompt
     state.mode = "create"
     state.status = "pending"
-    state.message = "Preparing design brief"
+    state.message = "Preparing product brief"
     state.in_progress = True
     state.generation_started_at = _utcnow()
     state.image_count = request.image_count
@@ -184,7 +201,7 @@ async def start_create(request: ProductCreateRequest):
         state,
         status="pending",
         progress=0,
-        message="Preparing design brief",
+        message="Preparing product brief",
     )
 
     task = asyncio.create_task(
@@ -456,6 +473,47 @@ async def fetch_product_state_alias():
 @router.get("/status")
 async def fetch_product_status():
     return get_product_status().model_dump(mode="json")
+
+
+@router.get("/model/current")
+async def fetch_current_product_model():
+    state = get_product_state()
+    source_url = _resolve_model_source_url(state)
+    if not source_url:
+        raise HTTPException(status_code=404, detail="No product model available")
+
+    cache_key = state.active_version_id or "current"
+    try:
+        file_path = get_cached_product_model_path(cache_key, source_url)
+    except Exception as exc:
+        logger.error("[product-router] Failed to cache current product model: %s", exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Failed to retrieve product model: {exc}") from exc
+
+    return FileResponse(
+        str(file_path),
+        media_type="model/gltf-binary",
+        filename="product.glb",
+    )
+
+
+@router.get("/model/{version_id}")
+async def fetch_version_product_model(version_id: str):
+    state = get_product_state()
+    source_url = _resolve_model_source_url(state, version_id=version_id)
+    if not source_url:
+        raise HTTPException(status_code=404, detail="Product model version not found")
+
+    try:
+        file_path = get_cached_product_model_path(version_id, source_url)
+    except Exception as exc:
+        logger.error("[product-router] Failed to cache product model %s: %s", version_id, exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Failed to retrieve product model: {exc}") from exc
+
+    return FileResponse(
+        str(file_path),
+        media_type="model/gltf-binary",
+        filename=f"{version_id}.glb",
+    )
 
 
 @router.post("/recover")

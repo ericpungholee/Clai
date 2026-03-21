@@ -118,6 +118,11 @@ export const API_ENDPOINTS = {
     get clear() {
       return `${getApiBaseUrl()}/product/clear`;
     },
+    get currentModel() {
+      return `${getApiBaseUrl()}/product/model/current`;
+    },
+    versionModel: (versionId: string) =>
+      `${getApiBaseUrl()}/product/model/${versionId}`,
     get export() {
       return `${getApiBaseUrl()}/product/export`;
     },

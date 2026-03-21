@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 try:
-    from app.integrations.trellis import trellis_service
+    from app.integrations.trellis import resolve_trellis_preset, trellis_service
 
     TRELLIS_AVAILABLE = True
 except ImportError:
+    resolve_trellis_preset = None
     trellis_service = None
     TRELLIS_AVAILABLE = False
 
@@ -269,26 +270,7 @@ class ProductPipelineService:
 
         try:
             await self.create_design_brief(state, prompt)
-            concepts = await self.generate_concept_directions(state, max_concepts=1)
-            primary_concept = concepts[0] if concepts else None
-            if not primary_concept:
-                raise RuntimeError("No concept directions were generated")
-
-            state.selected_concept_id = primary_concept.concept_id
-            state.reference_set = None
-            state.images = (
-                [primary_concept.concept_image_url]
-                if primary_concept.concept_image_url
-                else []
-            )
-            state.message = f"Building initial 3D draft from {primary_concept.title}"
-            save_product_state(state)
-            self._sync_status_from_state(
-                state,
-                progress=72,
-                message=state.message,
-            )
-
+            primary_concept = await self.generate_initial_sketch(state)
             await self.generate_3d_draft(state, note="Initial draft from prompt")
             state.mark_complete(
                 "Initial 3D draft ready for editing",
@@ -302,6 +284,62 @@ class ProductPipelineService:
             )
         except Exception as exc:
             self._handle_failure(state, exc)
+
+    async def generate_initial_sketch(self, state: ProductState) -> ConceptDirection:
+        if not state.design_brief:
+            raise RuntimeError("Design brief missing")
+
+        concept = self._build_concept_directions(state.design_brief, feedback=None)[0]
+        operation = self._begin_operation(
+            state,
+            operation_type="generate_concepts",
+            input_prompt=state.prompt,
+            target_scope="initial_sketch",
+        )
+        state.mark_progress(
+            "generating_concepts",
+            "Generating Gemini sketch",
+        )
+        save_product_state(state)
+        self._sync_status_from_state(
+            state,
+            progress=40,
+            message="Generating Gemini sketch",
+            operation=operation,
+        )
+
+        images = await self._generate_product_images(
+            prompt=self._build_concept_image_prompt(state.design_brief, concept),
+            workflow="create",
+            image_count=1,
+            base_description=self._build_base_description(state.design_brief, concept),
+        )
+        if not images:
+            raise RuntimeError(f"Concept image generation returned no image for '{concept.title}'")
+
+        concept.concept_image_url = images[0]
+        state.concept_directions = [concept]
+        state.selected_concept_id = concept.concept_id
+        state.reference_set = None
+        state.images = [images[0]]
+        state.set_stage("concepts_ready")
+        self._complete_operation(
+            state,
+            operation,
+            summary="Generated initial Gemini sketch for 3D model generation",
+            artifact_ids=[concept.concept_id],
+        )
+        save_product_state(state)
+        self._sync_status_from_state(
+            state,
+            progress=65,
+            message="Gemini sketch ready",
+        )
+
+        if settings.SAVE_ARTIFACTS_LOCALLY:
+            self._save_gemini_images(state.images, "concepts")
+
+        return concept
 
     async def run_refine_concepts(self, feedback: str) -> None:
         logger.info("[product-pipeline] Refining concept directions")
@@ -500,13 +538,13 @@ class ProductPipelineService:
         )
         state.mark_progress(
             "creating_brief",
-            "Extracting structured product brief",
+            "Preparing product brief",
         )
         save_product_state(state)
         self._sync_status_from_state(
             state,
             progress=12,
-            message="Extracting structured design brief",
+            message="Preparing product brief",
             operation=operation,
         )
 
@@ -523,8 +561,8 @@ class ProductPipelineService:
         save_product_state(state)
         self._sync_status_from_state(
             state,
-            progress=28,
-            message="Design brief ready",
+            progress=25,
+            message="Product brief ready",
         )
         return brief
 
@@ -565,51 +603,34 @@ class ProductPipelineService:
             message=(
                 "Rendering initial concept preview"
                 if total_concepts == 1
-                else f"Rendering {total_concepts} concept previews in parallel"
+                else f"Rendering {total_concepts} concept previews"
             ),
             operation=operation,
         )
 
-        async def render_concept_preview(
-            index: int,
-            concept: ConceptDirection,
-        ) -> tuple[int, str]:
-            images = await self._generate_product_images(
-                prompt=self._build_concept_image_prompt(state.design_brief, concept),
-                workflow="create",
-                image_count=1,
-                base_description=self._build_base_description(state.design_brief, concept),
-            )
-            if not images:
-                raise RuntimeError(f"Concept image generation returned no image for '{concept.title}'")
-            return index, images[0]
-
-        preview_tasks = [
-            asyncio.create_task(render_concept_preview(index, concept))
-            for index, concept in enumerate(concepts, start=1)
-        ]
-
         completed_previews = 0
-        try:
-            for completed_task in asyncio.as_completed(preview_tasks):
-                index, image_url = await completed_task
-                concepts[index - 1].concept_image_url = image_url
-                completed_previews += 1
-                progress = 42 + int(completed_previews * (22 / max(total_concepts, 1)))
-                self._sync_status_from_state(
-                    state,
-                    progress=progress,
-                    message=(
-                        "Initial concept preview ready"
-                        if total_concepts == 1
-                        else f"Rendered {completed_previews} of {total_concepts} concept previews"
-                    ),
-                    operation=operation,
-                )
-        except Exception:
-            for preview_task in preview_tasks:
-                preview_task.cancel()
-            raise
+        for index, concept in enumerate(concepts, start=1):
+            image_url = await self._generate_concept_preview(
+                state=state,
+                brief=state.design_brief,
+                concept=concept,
+                operation=operation,
+                index=index,
+                total=total_concepts,
+            )
+            concepts[index - 1].concept_image_url = image_url
+            completed_previews += 1
+            progress = 42 + int(completed_previews * (22 / max(total_concepts, 1)))
+            self._sync_status_from_state(
+                state,
+                progress=progress,
+                message=(
+                    "Initial concept preview ready"
+                    if total_concepts == 1
+                    else f"Rendered {completed_previews} of {total_concepts} concept previews"
+                ),
+                operation=operation,
+            )
 
         state.concept_directions = concepts
         state.selected_concept_id = None
@@ -804,11 +825,11 @@ class ProductPipelineService:
             self._sync_status_from_state(
                 state,
                 progress=12 + int(completed_roles * (55 / total_roles)),
-                message=f"Generating {len(remaining_roles)} supporting references in parallel",
+                message=f"Generating {len(remaining_roles)} supporting references",
                 operation=operation,
             )
 
-            async def render_reference(role: ReferenceRole) -> ReferenceImage:
+            for role in remaining_roles:
                 prompt = self._build_reference_prompt(brief, concept, role, notes=notes)
                 images = await self._generate_product_images(
                     prompt=prompt,
@@ -819,33 +840,21 @@ class ProductPipelineService:
                 )
                 if not images:
                     raise RuntimeError(f"Reference generation returned no image for role '{role}'")
-                return ReferenceImage(
-                    role=role,
-                    url=images[0],
-                    prompt=prompt,
-                )
-
-            reference_tasks = [
-                asyncio.create_task(render_reference(role))
-                for role in remaining_roles
-            ]
-
-            try:
-                for completed_task in asyncio.as_completed(reference_tasks):
-                    reference = await completed_task
-                    references.append(reference)
-                    completed_roles += 1
-                    progress = 12 + int(completed_roles * (55 / total_roles))
-                    self._sync_status_from_state(
-                        state,
-                        progress=progress,
-                        message=f"Generated {completed_roles} of {total_roles} references",
-                        operation=operation,
+                references.append(
+                    ReferenceImage(
+                        role=role,
+                        url=images[0],
+                        prompt=prompt,
                     )
-            except Exception:
-                for reference_task in reference_tasks:
-                    reference_task.cancel()
-                raise
+                )
+                completed_roles += 1
+                progress = 12 + int(completed_roles * (55 / total_roles))
+                self._sync_status_from_state(
+                    state,
+                    progress=progress,
+                    message=f"Generated {completed_roles} of {total_roles} references",
+                    operation=operation,
+                )
 
         references.sort(key=lambda reference: role_order[reference.role])
 
@@ -912,13 +921,13 @@ class ProductPipelineService:
         )
         state.mark_progress(
             "generating_model",
-            "Generating 3D draft with Trellis",
+            "Generating 3D model",
         )
         save_product_state(state)
         self._sync_status_from_state(
             state,
             progress=70,
-            message="Generating 3D draft with Trellis",
+            message="Generating 3D model",
             operation=operation,
         )
 
@@ -1143,12 +1152,13 @@ class ProductPipelineService:
 
         def progress_callback(status: str, progress: int, message: str):
             current_state = get_product_state()
+            current_status = get_product_status()
             current_state.status = status
-            current_state.message = message
+            current_state.message = "Generating 3D model"
             self._sync_status_from_state(
                 current_state,
-                progress=progress,
-                message=message,
+                progress=max(current_status.progress, progress),
+                message="Generating 3D model",
             )
 
         use_multi = (
@@ -1157,6 +1167,7 @@ class ProductPipelineService:
             else (settings.TRELLIS_ENABLE_MULTI_IMAGE and len(images) > 1)
         )
         algo = multi_image_algo or settings.TRELLIS_MULTIIMAGE_ALGO
+        preset = resolve_trellis_preset(settings.TRELLIS_PRODUCT_QUALITY)
 
         return await asyncio.to_thread(
             trellis_service.generate_3d_asset,
@@ -1164,6 +1175,7 @@ class ProductPipelineService:
             progress_callback=progress_callback,
             use_multi_image=use_multi,
             multiimage_algo=algo,
+            **preset,
         )
 
     def _reset_state_for_new_product(
@@ -1705,7 +1717,9 @@ class ProductPipelineService:
         payload.model_file = status.model_file or payload.model_file
         payload.preview_image = status.preview_image or payload.preview_image
         payload.updated_at = status.updated_at
-        save_product_status(payload)
+        # Status updates are polled directly by the product page. Avoid rewriting
+        # the full current-project record on every transient progress tick.
+        save_product_status(payload, sync_project=False)
 
     def _save_gemini_images(self, images: List[str], mode: str) -> None:
         try:

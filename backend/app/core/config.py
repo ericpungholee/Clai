@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings
 
@@ -11,6 +11,7 @@ _DEFAULTS = {
     "GEMINI_IMAGE_SIZE": "1K",
     "GEMINI_IMAGE_ASPECT_RATIO": "1:1",
     "TRELLIS_MODEL_ID": "fal-ai/trellis-2",
+    "TRELLIS_PRODUCT_QUALITY": "balanced_plus",
 }
 
 class Settings(BaseSettings):
@@ -34,6 +35,7 @@ class Settings(BaseSettings):
     TRELLIS_MODEL_ID: str = "fal-ai/trellis-2"
     TRELLIS_ENABLE_MULTI_IMAGE: bool = False
     TRELLIS_MULTIIMAGE_ALGO: str = "stochastic"  # stochastic | multidiffusion
+    TRELLIS_PRODUCT_QUALITY: Literal["fast", "balanced", "balanced_plus", "high_quality"] = "balanced_plus"
 
     @field_validator(
         "FAL_KEY",
@@ -45,6 +47,7 @@ class Settings(BaseSettings):
         "GEMINI_IMAGE_SIZE",
         "GEMINI_IMAGE_ASPECT_RATIO",
         "TRELLIS_MODEL_ID",
+        "TRELLIS_PRODUCT_QUALITY",
         mode="before",
     )
     @classmethod

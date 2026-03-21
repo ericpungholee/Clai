@@ -17,9 +17,10 @@ import {
   generateProductDraft,
   getProductState,
   getProductStatus,
+  getProductViewerModelUrl,
   selectProductConcept,
 } from "@/lib/product-api";
-import type { ProductState, ProductStatus } from "@/lib/product-types";
+import type { OperationType, ProductState, ProductStatus } from "@/lib/product-types";
 import { useLoading } from "@/providers/LoadingProvider";
 
 type ProductWorkspaceStage = "empty" | "loading" | "editor" | "error";
@@ -66,6 +67,46 @@ function getWorkspaceLabel(state: ProductState | null): string {
   return "Loading";
 }
 
+function getStatusHeadline(
+  state: ProductState | null,
+  status: ProductStatus | null,
+): string {
+  const operationType = status?.active_operation_type;
+  const operationLabels: Partial<Record<OperationType, string>> = {
+    create_brief: "Preparing product brief",
+    generate_concepts: "Generating Gemini sketch",
+    generate_3d_draft: "Generating 3D model",
+    edit_whole_product: "Generating updated sketch",
+    edit_region: "Generating updated sketch",
+    restyle_materials: "Generating updated sketch",
+  };
+
+  if (operationType && operationLabels[operationType]) {
+    return operationLabels[operationType]!;
+  }
+
+  return getWorkspaceLabel(state);
+}
+
+function getLoadingPreviewUrl(
+  state: ProductState | null,
+  status: ProductStatus | null,
+): string | undefined {
+  return (
+    status?.preview_image ??
+    state?.images[0] ??
+    state?.reference_set?.images[0]?.url ??
+    state?.concept_directions[0]?.concept_image_url
+  );
+}
+
+function getLoadingMessage(
+  state: ProductState | null,
+  status: ProductStatus | null,
+): string {
+  return status?.message ?? state?.message ?? getStatusHeadline(state, status);
+}
+
 export default function ProductPage() {
   const router = useRouter();
   const { stopLoading } = useLoading();
@@ -84,6 +125,10 @@ export default function ProductPage() {
 
   const workspaceStage = deriveWorkspaceStage(productState);
   const progressValue = Math.min(productStatus?.progress || 0, 100);
+  const statusHeadline = getStatusHeadline(productState, productStatus);
+  const loadingPreviewUrl = getLoadingPreviewUrl(productState, productStatus);
+  const loadingMessage = getLoadingMessage(productState, productStatus);
+  const showLoadingSubcopy = loadingMessage !== statusHeadline;
   const projectTitle =
     currentProject?.name ??
     productState?.design_brief?.product_name ??
@@ -149,7 +194,7 @@ export default function ProductPage() {
         return;
       }
 
-      await loadModel(assetKey, remoteModelUrl);
+      await loadModel(assetKey, getProductViewerModelUrl(state));
     },
     [loadModel],
   );
@@ -328,8 +373,27 @@ export default function ProductPage() {
   if (workspaceStage === "loading") {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 px-4">
-        <Loader2 className="h-10 w-10 animate-spin" />
-        <div className="text-sm font-medium">{getWorkspaceLabel(productState)}</div>
+        {loadingPreviewUrl ? (
+          <div className="relative w-full max-w-sm overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+            <img
+              src={loadingPreviewUrl}
+              alt={productState?.design_brief?.product_name ?? productState?.prompt ?? "Product preview"}
+              className="aspect-square h-full w-full object-cover"
+            />
+            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent p-4 text-white">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>{statusHeadline}</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <Loader2 className="h-10 w-10 animate-spin" />
+        )}
+        {!loadingPreviewUrl ? <div className="text-center text-sm font-medium">{statusHeadline}</div> : null}
+        {showLoadingSubcopy ? (
+          <div className="text-center text-xs text-muted-foreground">{loadingMessage}</div>
+        ) : null}
         <div className="w-full max-w-xs space-y-2">
           <div className="h-2 overflow-hidden rounded-full bg-muted">
             <div
@@ -390,7 +454,7 @@ export default function ProductPage() {
             <div className="absolute right-6 top-6">
               <div className="flex items-center gap-2 rounded-full border border-border bg-card/95 px-3 py-2 text-sm shadow-lg backdrop-blur-sm">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                <span>{getWorkspaceLabel(productState)}</span>
+                <span>{statusHeadline}</span>
                 <span className="text-xs text-muted-foreground">{progressValue}%</span>
               </div>
             </div>

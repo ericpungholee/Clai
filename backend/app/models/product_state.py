@@ -315,10 +315,12 @@ def get_product_state() -> ProductState:
     return ProductState.model_validate(payload)
 
 
-def save_product_state(state: ProductState) -> None:
+def save_product_state(state: ProductState, *, sync_project: bool = True) -> None:
     """Persist the session state back to Redis."""
     state.updated_at = _utcnow()
     redis_service.set_json(PRODUCT_STATE_KEY, state.as_json())
+    if not sync_project:
+        return
     try:
         from app.services.project_store import sync_current_project_product_state
 
@@ -341,9 +343,11 @@ def get_product_status() -> ProductStatus:
     return ProductStatus.model_validate(payload)
 
 
-def save_product_status(status: ProductStatus) -> None:
+def save_product_status(status: ProductStatus, *, sync_project: bool = True) -> None:
     status.updated_at = _utcnow()
     redis_service.set_json(PRODUCT_STATUS_KEY, status.as_json())
+    if not sync_project:
+        return
     try:
         from app.services.project_store import sync_current_project_product_status
 

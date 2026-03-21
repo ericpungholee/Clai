@@ -6,41 +6,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.core.redis import redis_service
-from app.integrations.trellis import TrellisOutput, trellis_service
+from app.integrations.trellis import TrellisOutput, TrellisQuality, resolve_trellis_preset, trellis_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/trellis", tags=["trellis"])
 STATUS_KEY = "trellis_status:current"
-
-TRELLIS_PRESETS = {
-    "balanced": {
-        "resolution": 1024,
-        "texture_size": 2048,
-        "decimation_target": 500000,
-        "ss_sampling_steps": 12,
-        "ss_guidance_strength": 7.5,
-        "shape_slat_sampling_steps": 12,
-        "shape_slat_guidance_strength": 7.5,
-        "tex_slat_sampling_steps": 12,
-        "tex_slat_guidance_strength": 1.0,
-        "remesh": True,
-        "remesh_band": 1.0,
-    },
-    "high_quality": {
-        "resolution": 1536,
-        "texture_size": 4096,
-        "decimation_target": 750000,
-        "ss_sampling_steps": 20,
-        "ss_guidance_strength": 8.0,
-        "shape_slat_sampling_steps": 20,
-        "shape_slat_guidance_strength": 8.0,
-        "tex_slat_sampling_steps": 16,
-        "tex_slat_guidance_strength": 1.0,
-        "remesh": True,
-        "remesh_band": 1.0,
-    },
-}
 
 
 class Generate3DRequest(BaseModel):
@@ -57,7 +28,7 @@ class Generate3DRequest(BaseModel):
     tex_slat_guidance_strength: Optional[float] = None
     remesh: Optional[bool] = None
     remesh_band: Optional[float] = None
-    quality: Literal["balanced", "high_quality"] = "balanced"
+    quality: TrellisQuality = "balanced"
     use_multi_image: Optional[bool] = None
 
 
@@ -80,7 +51,7 @@ async def generate_3d_asset(request: Generate3DRequest):
             }
         )
 
-        preset = TRELLIS_PRESETS.get(request.quality, TRELLIS_PRESETS["balanced"]).copy()
+        preset = resolve_trellis_preset(request.quality)
         overrides = {
             "resolution": request.resolution,
             "texture_size": request.texture_size,

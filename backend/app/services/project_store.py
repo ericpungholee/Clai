@@ -68,7 +68,26 @@ def _derive_project_name(
     return _UNTITLED_PROJECT_NAME
 
 
+def _is_inline_image(url: Optional[str]) -> bool:
+    return bool(url and isinstance(url, str) and url.startswith("data:image"))
+
+
 def _preview_image(product_state: ProductState, packaging_state: PackagingState) -> Optional[str]:
+    # Prefer inline previews first because Trellis no-background URLs can expire,
+    # while Gemini and packaging data URLs remain stable for project cards.
+    inline_candidates = [
+        *product_state.images,
+        *(product_state.get_active_version().preview_images if product_state.get_active_version() else []),
+        *(product_state.trellis_output.no_background_images if product_state.trellis_output else []),
+        *[
+            texture.texture_url
+            for texture in product_state_to_packaging_textures(packaging_state)
+        ],
+    ]
+    for candidate in inline_candidates:
+        if _is_inline_image(candidate):
+            return candidate
+
     active_version = product_state.get_active_version()
     if active_version and active_version.preview_images:
         return active_version.preview_images[0]
@@ -83,6 +102,13 @@ def _preview_image(product_state: ProductState, packaging_state: PackagingState)
         if texture.texture_url:
             return texture.texture_url
     return None
+
+
+def product_state_to_packaging_textures(packaging_state: PackagingState):
+    return [
+        *packaging_state.box_state.panel_textures.values(),
+        *packaging_state.cylinder_state.panel_textures.values(),
+    ]
 
 
 def _has_packaging_assets(packaging_state: PackagingState) -> bool:

@@ -21,6 +21,7 @@ import { getCachedModelUrl } from "@/lib/model-cache";
 import {
   downloadProductExport,
   getProductState,
+  getProductViewerModelUrl,
 } from "@/lib/product-api";
 import { updateCurrentProjectContext } from "@/lib/project-api";
 import type { ProductState } from "@/lib/product-types";
@@ -144,7 +145,7 @@ export default function FinalView() {
         if (assetUrl) {
           const cachedUrl = await getCachedModelUrl(
             assetKey,
-            assetUrl,
+            getProductViewerModelUrl(state),
           );
           setProductModelUrl(cachedUrl);
         }
